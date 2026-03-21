@@ -33,6 +33,15 @@ class ColumnDefinition:
     start_bit: int = 0
     total_bits: int = 8
 
+    def normalized_byte_span(self, width: int) -> tuple[int, int] | None:
+        if self.unit != "byte" or width <= 0:
+            return None
+        start = max(0, self.start_byte)
+        end = min(self.end_byte, width - 1)
+        if end < start:
+            return None
+        return start, end
+
 
 @dataclass
 class HeaderModel:
@@ -75,6 +84,7 @@ class ByteTableModel(QAbstractTableModel):
         self.column_definitions: List[ColumnDefinition] = []
         self._column_span_data: dict[int, tuple[int, ColumnDefinition]] = {}
         self._column_span_lookup: dict[int, int] = {}
+        self._column_backgrounds: dict[int, QColor] = {}
         self._rebuild_column_spans()
 
     def set_bytes_per_row(self, value: int):
@@ -195,14 +205,7 @@ class ByteTableModel(QAbstractTableModel):
     def _background_for_column(self, column: int) -> Optional[QColor]:
         if self._display_mode != "byte":
             return None
-        for col_def in self.column_definitions:
-            if col_def.unit != "byte":
-                continue
-            if col_def.start_byte <= column <= col_def.end_byte:
-                color = COLOR_NAME_TO_QCOLOR.get(col_def.color_name)
-                if color:
-                    return color
-        return None
+        return self._column_backgrounds.get(column)
 
     def notify_column_definitions_changed(self):
         self._rebuild_column_spans()
@@ -211,14 +214,19 @@ class ByteTableModel(QAbstractTableModel):
     def _rebuild_column_spans(self):
         self._column_span_data.clear()
         self._column_span_lookup.clear()
+        self._column_backgrounds.clear()
         if self._display_mode != "byte":
             return
         for col_def in self.column_definitions:
-            if col_def.unit != "byte" or not col_def.label:
+            span = col_def.normalized_byte_span(self._bytes_per_row)
+            if span is None:
                 continue
-            start = max(0, col_def.start_byte)
-            end = min(col_def.end_byte, self._bytes_per_row - 1)
-            if end < start:
+            start, end = span
+            color = COLOR_NAME_TO_QCOLOR.get(col_def.color_name)
+            for col in range(start, end + 1):
+                if color is not None:
+                    self._column_backgrounds[col] = color
+            if not col_def.label:
                 continue
             length = end - start + 1
             self._column_span_data[start] = (length, col_def)

@@ -3,6 +3,13 @@
 import math
 import numpy as np
 from collections import Counter
+from common.bit_view_utils import (
+    apply_bit_order,
+    bits_to_ascii,
+    bits_to_int,
+    build_highlight_intervals,
+    is_bit_highlighted,
+)
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollArea,
                               QSizePolicy, QSpinBox, QDoubleSpinBox, QTextEdit, QTableWidget,
                               QTableWidgetItem, QHeaderView, QAbstractItemView, QApplication,
@@ -109,7 +116,7 @@ class FieldInspectorWidget(QWidget):
         # Output area
         self.output = QTextEdit()
         self.output.setReadOnly(True)
-        self.output.setFont(QFont("Courier", 9))
+        self.output.setFont(QFont("Consolas", 10))
         self.output.setPlaceholderText("Select column(s) in framed byte mode to inspect values.")
         layout.addWidget(self.output, stretch=1)
 
@@ -186,35 +193,13 @@ class FieldInspectorWidget(QWidget):
         return self._format_scaled_value(value)
 
     def _apply_bit_order(self, bits):
-        if self.bit_order == "msb":
-            return bits
-        return bits[::-1]
+        return apply_bit_order(bits, self.bit_order)
 
     def _bits_to_int(self, bits):
-        if bits is None or len(bits) == 0:
-            return None
-        bit_string = "".join(str(int(b)) for b in bits.tolist())
-        return int(bit_string, 2)
+        return bits_to_int(bits)
 
     def _bits_to_ascii(self, bits):
-        if bits is None or len(bits) == 0:
-            return "(no data)"
-
-        bit_len = len(bits)
-        pad = (8 - (bit_len % 8)) % 8
-        if pad:
-            padded = np.concatenate([bits, np.zeros(pad, dtype=np.uint8)])
-        else:
-            padded = bits
-
-        byte_values = np.packbits(padded)
-        chars = []
-        for b in byte_values:
-            if 32 <= b <= 126:
-                chars.append(chr(int(b)))
-            else:
-                chars.append(".")
-        return "".join(chars)
+        return bits_to_ascii(bits)
 
     def _format_scaled_value(self, value):
         if value is None:
@@ -249,7 +234,7 @@ class FieldStatisticsWidget(QWidget):
 
         self.output = QTextEdit()
         self.output.setReadOnly(True)
-        self.output.setFont(QFont("Courier", 9))
+        self.output.setFont(QFont("Consolas", 10))
         self.output.setPlaceholderText("Select column(s) to see statistics.")
         layout.addWidget(self.output, stretch=1)
 
@@ -260,14 +245,10 @@ class FieldStatisticsWidget(QWidget):
         self._render_stats()
 
     def _apply_bit_order(self, bits):
-        if self.bit_order == "msb":
-            return bits
-        return bits[::-1]
+        return apply_bit_order(bits, self.bit_order)
 
     def _bits_to_int(self, bits):
-        if bits is None or len(bits) == 0:
-            return None
-        return int("".join(str(int(b)) for b in bits.tolist()), 2)
+        return bits_to_int(bits)
 
     def _format_value(self, value):
         if value is None:
@@ -358,7 +339,7 @@ class TextDisplayWidget(QTextEdit):
     def __init__(self):
         super().__init__()
         self.setReadOnly(True)
-        self.setFont(QFont("Courier", 10))
+        self.setFont(QFont("Consolas", 11))
         self.bits = None
         self.width = 64
         self.display_mode = "binary"
@@ -384,27 +365,14 @@ class TextDisplayWidget(QTextEdit):
 
     def _build_highlight_intervals(self):
         """Build sorted list of highlight intervals for O(log n) lookup"""
-        if not self.highlighted_positions or self.pattern_length == 0:
-            self.highlight_intervals = []
-            return
-        intervals = [(pos, pos + self.pattern_length) for pos in self.highlighted_positions]
-        self.highlight_intervals = sorted(intervals)
+        self.highlight_intervals = build_highlight_intervals(
+            self.highlighted_positions,
+            self.pattern_length,
+        )
 
     def _is_bit_highlighted(self, bit_index):
         """Fast O(log n) binary search to check if bit is highlighted"""
-        if not self.highlight_intervals:
-            return False
-        left, right = 0, len(self.highlight_intervals) - 1
-        while left <= right:
-            mid = (left + right) // 2
-            start, end = self.highlight_intervals[mid]
-            if start <= bit_index < end:
-                return True
-            elif bit_index < start:
-                right = mid - 1
-            else:
-                left = mid + 1
-        return False
+        return is_bit_highlighted(self.highlight_intervals, bit_index)
 
     def clear_highlights(self):
         self.highlighted_positions.clear()
@@ -425,7 +393,7 @@ class TextDisplayWidget(QTextEdit):
     def display_binary(self):
         """Display bits as binary (0s and 1s) - OPTIMIZED with pagination"""
         html_parts = []
-        html_parts.append('<pre style="font-family: Courier; font-size: 10pt; margin: 0; padding: 5px;">')
+        html_parts.append('<pre style="font-family: Consolas, Courier New, monospace; font-size: 11pt; margin: 0; padding: 8px;">')
 
         # OPTIMIZED: Calculate pagination
         total_rows = (len(self.bits) + self.width - 1) // self.width
@@ -464,7 +432,7 @@ class TextDisplayWidget(QTextEdit):
     def display_hex(self):
         """Display bits as hex (nibbles - 4 bits per character) - OPTIMIZED with pagination"""
         html_parts = []
-        html_parts.append('<pre style="font-family: Courier; font-size: 10pt; margin: 0; padding: 5px;">')
+        html_parts.append('<pre style="font-family: Consolas, Courier New, monospace; font-size: 11pt; margin: 0; padding: 8px;">')
 
         # OPTIMIZED: Calculate pagination
         total_rows = (len(self.bits) + self.width - 1) // self.width

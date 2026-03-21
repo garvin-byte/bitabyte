@@ -93,6 +93,20 @@ class NextGenBitViewerWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
+    def _set_row_spin_state(self, minimum: int, maximum: int, step: int, value: int, *, enabled: bool) -> None:
+        self.row_spin.blockSignals(True)
+        self.row_spin.setRange(minimum, maximum)
+        self.row_spin.setSingleStep(step)
+        self.row_spin.setValue(value)
+        self.row_spin.blockSignals(False)
+        self.row_spin.setEnabled(enabled)
+
+    def _refresh_header(self, width: int | None = None) -> None:
+        header_width = self.row_spin.value() if width is None else width
+        self.header_model = self._build_header_model(header_width)
+        self.header_view.setHeaderModel(self.header_model)
+        self._resize_columns()
+
     def _build_toolbar(self):
         layout = QHBoxLayout()
         layout.setSpacing(10)
@@ -216,12 +230,12 @@ class NextGenBitViewerWindow(QMainWindow):
         labels = ["" for _ in range(width)]
         spans: list[tuple[int, int, str]] = list(self.frame_label_spans)
         for col_def in self.model.column_definitions:
-            if col_def.unit != "byte" or not col_def.label:
+            if not col_def.label:
                 continue
-            start = max(0, min(width - 1, col_def.start_byte))
-            end = max(0, min(width - 1, col_def.end_byte))
-            if end < start:
+            span = col_def.normalized_byte_span(width)
+            if span is None:
                 continue
+            start, end = span
             length = end - start + 1
             span_tuple = (start, length, col_def.label)
             if span_tuple not in spans:
@@ -242,7 +256,7 @@ class NextGenBitViewerWindow(QMainWindow):
         self.status_label.setText(f"Loaded {path.name} ({self.data_source.byte_length:,} bytes)")
         self.file_info_label.setText(f"{path.name}\n{self.data_source.byte_length:,} bytes")
         self.save_btn.setEnabled(True)
-        self._resize_columns()
+        self._refresh_header()
         self._clear_frames(update_status=False)
 
     def _update_row_width(self, value: int):
@@ -251,13 +265,10 @@ class NextGenBitViewerWindow(QMainWindow):
                 return
             self._byte_row_free = value
             self.model.set_bytes_per_row(value)
-            self.header_model = self._build_header_model(value)
         else:
             self._bit_row_setting = value
             self.model.set_bits_per_row(value)
-            self.header_model = self._build_header_model(value)
-        self.header_view.setHeaderModel(self.header_model)
-        self._resize_columns()
+        self._refresh_header(value)
 
     def _save_file(self):
         if self.data_source.byte_length == 0:
@@ -298,12 +309,7 @@ class NextGenBitViewerWindow(QMainWindow):
             self.byte_mode_panel.show()
             self.bit_mode_panel.hide()
             self.row_label.setText("Bytes / Row:")
-            self.row_spin.blockSignals(True)
-            self.row_spin.setRange(1, 512)
-            self.row_spin.setSingleStep(1)
-            self.row_spin.setValue(self._byte_row_free)
-            self.row_spin.blockSignals(False)
-            self.row_spin.setEnabled(True)
+            self._set_row_spin_state(1, 512, 1, self._byte_row_free, enabled=True)
             self.model.set_bytes_per_row(self._byte_row_free)
             if self.model.has_frames():
                 self._lock_row_size_to_frame()
@@ -311,16 +317,9 @@ class NextGenBitViewerWindow(QMainWindow):
             self.byte_mode_panel.hide()
             self.bit_mode_panel.show()
             self.row_label.setText("Bits / Row:")
-            self.row_spin.blockSignals(True)
-            self.row_spin.setRange(8, 4096)
-            self.row_spin.setSingleStep(8)
-            self.row_spin.setValue(self._bit_row_setting)
-            self.row_spin.blockSignals(False)
-            self.row_spin.setEnabled(True)
+            self._set_row_spin_state(8, 4096, 8, self._bit_row_setting, enabled=True)
             self.model.set_bits_per_row(self._bit_row_setting)
-        self.header_model = self._build_header_model(self.row_spin.value())
-        self.header_view.setHeaderModel(self.header_model)
-        self._resize_columns()
+        self._refresh_header()
         self.clear_frames_btn.setEnabled(self.model.has_frames())
         if self.model.has_frames() and self.model.display_mode == "byte":
             self._lock_row_size_to_frame()
@@ -336,9 +335,7 @@ class NextGenBitViewerWindow(QMainWindow):
         self.frame_label_spans = []
 
     def on_frames_changed(self):
-        self.header_model = self._build_header_model(self.row_spin.value())
-        self.header_view.setHeaderModel(self.header_model)
-        self._resize_columns()
+        self._refresh_header()
         self.clear_frames_btn.setEnabled(self.model.has_frames())
         if self.model.has_frames() and self.model.display_mode == "byte":
             self._lock_row_size_to_frame()
@@ -348,31 +345,17 @@ class NextGenBitViewerWindow(QMainWindow):
     def _lock_row_size_to_frame(self):
         max_len = max(1, self.model.frame_max_length)
         self._byte_row_locked = max_len
-        self.row_spin.blockSignals(True)
-        self.row_spin.setRange(max_len, max_len)
-        self.row_spin.setValue(max_len)
-        self.row_spin.blockSignals(False)
-        self.row_spin.setEnabled(False)
+        self._set_row_spin_state(max_len, max_len, 1, max_len, enabled=False)
         self.model.set_bytes_per_row(max_len)
-        self.header_model = self._build_header_model(max_len)
-        self.header_view.setHeaderModel(self.header_model)
-        self._resize_columns()
+        self._refresh_header(max_len)
 
     def _unlock_row_size(self):
-        self.row_spin.blockSignals(True)
-        self.row_spin.setEnabled(True)
-        self.row_spin.setRange(1, 512)
-        self.row_spin.setSingleStep(1)
-        self.row_spin.setValue(self._byte_row_free)
-        self.row_spin.blockSignals(False)
+        self._set_row_spin_state(1, 512, 1, self._byte_row_free, enabled=True)
         self.model.set_bytes_per_row(self._byte_row_free)
-        self.header_model = self._build_header_model(self._byte_row_free)
-        self.header_view.setHeaderModel(self.header_model)
-        self._resize_columns()
+        self._refresh_header(self._byte_row_free)
 
     def on_column_definitions_changed(self):
         self.model.notify_column_definitions_changed()
         self.columns_panel.refresh()
-        self.header_model = self._build_header_model(self.row_spin.value())
-        self.header_view.setHeaderModel(self.header_model)
+        self._refresh_header()
         self.table.viewport().update()

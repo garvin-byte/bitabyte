@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING, List, Optional
 
 import numpy as np
-from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -19,13 +17,11 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QVBoxLayout,
-    QWidget,
 )
 
+from common.bit_utils import bits_from_binary_string, bits_from_hex_string
 from .data import ByteDataSource
 from .models import ByteTableModel, ColumnDefinition
-from .models import HeaderModel, HeaderBand
-from .headers import MultiRowHeaderView
 from .colors import populate_color_combo
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -124,21 +120,17 @@ class FrameSyncDialog(QDialog):
             return None
         if self.hex_radio.isChecked():
             cleaned = text.replace(" ", "")
-            if cleaned.startswith("0x") or cleaned.startswith("0X"):
+            if cleaned.startswith(("0x", "0X")):
                 cleaned = cleaned[2:]
             if len(cleaned) == 0 or len(cleaned) % 2 != 0:
                 return None
-            try:
-                byte_values = bytes.fromhex(cleaned)
-                return np.unpackbits(np.frombuffer(byte_values, dtype=np.uint8))
-            except ValueError:
-                return None
-        else:
-            cleaned = text.replace(" ", "").upper()
-            cleaned = cleaned.replace("X", "1").replace("O", "0")
-            if not cleaned or any(ch not in "10" for ch in cleaned):
-                return None
-            return np.array([int(ch) for ch in cleaned], dtype=np.uint8)
+            return bits_from_hex_string(cleaned)
+
+        return bits_from_binary_string(
+            text.upper(),
+            aliases={"X": "1", "O": "0"},
+            ignored_characters={" "},
+        )
 
     def get_pattern_bits(self) -> Optional[np.ndarray]:
         return self._parse_bits(self.pattern_input.text().strip())

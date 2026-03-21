@@ -46,7 +46,12 @@ class ByteDataSource:
 
     def load_from_bytes(self, data: Sequence[int] | bytes | bytearray | np.ndarray) -> None:
         """Attach in-memory data."""
-        arr = np.frombuffer(bytes(data), dtype=np.uint8)
+        if isinstance(data, np.ndarray):
+            arr = np.asarray(data, dtype=np.uint8).reshape(-1)
+        elif isinstance(data, (bytes, bytearray, memoryview)):
+            arr = np.frombuffer(data, dtype=np.uint8)
+        else:
+            arr = np.asarray(data, dtype=np.uint8).reshape(-1)
         self._data = arr
         self._byte_length = arr.size
         self._path = None

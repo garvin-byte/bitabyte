@@ -13,6 +13,8 @@ import numpy as np
 import sys
 import os
 
+from common.bit_utils import bits_from_binary_string, bits_from_hex_string, parse_tap_list
+
 
 class FrameDataGenerator:
     def __init__(self):
@@ -66,35 +68,27 @@ class FrameDataGenerator:
 
     def hex_to_bits(self, hex_string: str) -> np.ndarray:
         """Convert hex string to bit array"""
-        if hex_string.startswith('0x') or hex_string.startswith('0X'):
-            hex_string = hex_string[2:]
-
-        try:
-            value = int(hex_string, 16)
-            bit_length = len(hex_string) * 4
-            binary_str = format(value, f'0{bit_length}b')
-            return np.array([int(b) for b in binary_str], dtype=np.uint8)
-        except ValueError:
+        bits = bits_from_hex_string(hex_string)
+        if bits is None:
             print(f"Error: Invalid hex pattern '{hex_string}'")
             return None
+        return bits
 
     def binary_to_bits(self, binary_string: str) -> np.ndarray:
         """Convert binary string to bit array"""
-        try:
-            return np.array([int(b) for b in binary_string], dtype=np.uint8)
-        except ValueError:
+        bits = bits_from_binary_string(binary_string)
+        if bits is None:
             print(f"Error: Invalid binary pattern '{binary_string}'")
             return None
+        return bits
 
     def parse_taps(self, taps_str: str) -> list:
         """Parse tap string like '0,1,7' or '0 1 7' into list"""
-        taps_str = taps_str.replace(',', ' ')
-        try:
-            taps = [int(t.strip()) for t in taps_str.split() if t.strip()]
-            return taps
-        except ValueError:
+        taps = parse_tap_list(taps_str)
+        if taps is None:
             print(f"Error: Invalid tap format '{taps_str}'")
             return None
+        return taps
 
     def apply_additive_lrs(self, data: np.ndarray, taps: list, initial_state: str = None) -> np.ndarray:
         """

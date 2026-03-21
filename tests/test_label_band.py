@@ -1,60 +1,65 @@
-#!/usr/bin/env python3
-"""Test script to debug label band creation."""
+import os
+import unittest
 
-from dataclasses import dataclass
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-@dataclass
-class ColumnDefinition:
-    start_byte: int
-    end_byte: int
-    label: str
-    display_format: str
-    color_name: str = "None"
-    unit: str = "byte"
-    start_bit: int = 0
-    total_bits: int = 8
+from nextgen.data import ByteDataSource
+from nextgen.main_window import NextGenBitViewerWindow
+from nextgen.models import ByteTableModel, ColumnDefinition
+from PyQt6.QtWidgets import QApplication
 
 
-def build_label_band(column_definitions, width: int):
-    labels = ["" for _ in range(width)]
-    spans = []
-    print(f"DEBUG: Building label band for width={width}")
-    print(f"DEBUG: Column definitions count: {len(column_definitions)}")
-    for col_def in column_definitions:
-        print(f"DEBUG: Col def: start={col_def.start_byte}, end={col_def.end_byte}, label={col_def.label}, unit={col_def.unit}")
-        if col_def.unit != "byte":
-            print(f"DEBUG: Skipping non-byte column")
-            continue
-        if not col_def.label:
-            print(f"DEBUG: Skipping empty label")
-            continue
-        start = max(0, min(width - 1, col_def.start_byte))
-        end = max(0, min(width - 1, col_def.end_byte))
-        if end < start:
-            print(f"DEBUG: Skipping invalid range")
-            continue
-        length = end - start + 1
-        print(f"DEBUG: Adding span: start={start}, length={length}, label={col_def.label}")
-        spans.append((start, length, col_def.label))
-        for idx in range(start, end + 1):
-            labels[idx] = col_def.label
-    print(f"DEBUG: Final spans: {spans}")
-    return labels, spans
+class LabelBandTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_normalized_byte_span_clamps_to_visible_width(self):
+        definition = ColumnDefinition(
+            start_byte=2,
+            end_byte=6,
+            label="Field",
+            display_format="hex",
+        )
+
+        self.assertEqual(definition.normalized_byte_span(4), (2, 3))
+
+    def test_model_uses_normalized_spans_for_lookup_and_backgrounds(self):
+        model = ByteTableModel(ByteDataSource(bytes_per_row=4))
+        definition = ColumnDefinition(
+            start_byte=1,
+            end_byte=8,
+            label="Sync",
+            display_format="hex",
+            color_name="Sky",
+        )
+
+        model.column_definitions.append(definition)
+        model.notify_column_definitions_changed()
+
+        self.assertEqual(model.span_for_column(1)[:2], (1, 3))
+        self.assertIsNotNone(model._background_for_column(3))
+        self.assertIsNone(model._background_for_column(0))
+
+    def test_window_label_band_reuses_normalized_spans(self):
+        window = NextGenBitViewerWindow()
+        try:
+            window.model.column_definitions.append(
+                ColumnDefinition(
+                    start_byte=0,
+                    end_byte=3,
+                    label="Sync",
+                    display_format="hex",
+                )
+            )
+
+            labels, spans = window._build_label_band(2)
+
+            self.assertEqual(labels, ["Sync", "Sync"])
+            self.assertEqual(spans, [(0, 2, "Sync")])
+        finally:
+            window.close()
 
 
-# Test with a 4-byte sync pattern at start
-col_defs = [
-    ColumnDefinition(
-        start_byte=0,
-        end_byte=3,
-        label="Sync",
-        display_format="hex",
-        color_name="Sky",
-        unit="byte",
-    )
-]
-
-labels, spans = build_label_band(col_defs, 16)
-print(f"\nResult:")
-print(f"Labels: {labels}")
-print(f"Spans: {spans}")
+if __name__ == "__main__":
+    unittest.main()

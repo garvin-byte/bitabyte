@@ -4,6 +4,7 @@ import numpy as np
 from PyQt6.QtWidgets import QWidget, QSizePolicy
 from PyQt6.QtCore import Qt, QRect, QSize, QLine
 from PyQt6.QtGui import QPainter, QColor, QPen, QBrush, QPalette, QFont, QPixmap, QImage
+from common.bit_view_utils import build_highlight_intervals, is_bit_highlighted
 
 class BitCanvas(QWidget):
     """Fast bit rendering widget using QPainter with tile-based QPixmap caching"""
@@ -85,35 +86,14 @@ class BitCanvas(QWidget):
 
     def _build_highlight_intervals(self):
         """Build sorted list of highlight intervals for O(log n) lookup"""
-        if not self.highlighted_positions or self.pattern_length == 0:
-            self.highlight_intervals = []
-            return
-
-        # Create list of (start, end) intervals
-        intervals = [(pos, pos + self.pattern_length) for pos in self.highlighted_positions]
-        # Sort by start position
-        self.highlight_intervals = sorted(intervals)
+        self.highlight_intervals = build_highlight_intervals(
+            self.highlighted_positions,
+            self.pattern_length,
+        )
 
     def _is_bit_highlighted(self, bit_index):
         """Fast O(log n) binary search to check if bit is highlighted"""
-        if not hasattr(self, 'highlight_intervals') or not self.highlight_intervals:
-            return False
-
-        # Binary search for the interval that might contain bit_index
-        left, right = 0, len(self.highlight_intervals) - 1
-
-        while left <= right:
-            mid = (left + right) // 2
-            start, end = self.highlight_intervals[mid]
-
-            if start <= bit_index < end:
-                return True
-            elif bit_index < start:
-                right = mid - 1
-            else:
-                left = mid + 1
-
-        return False
+        return is_bit_highlighted(self.highlight_intervals, bit_index)
 
     def clear_highlights(self):
         self.highlighted_positions.clear()
@@ -359,14 +339,34 @@ class LiveBitViewerCanvas(QWidget):
         super().__init__()
         self.frames_bits = []
         self.bit_size = 8
-        self.display_mode = "squares"  # "squares" or "circles"
+        self.display_mode = "squares"
         self.max_frame_bits = 0
+        self.size_value = 8
 
         self.setAutoFillBackground(True)
         palette = self.palette()
         palette.setColor(QPalette.ColorRole.Window, QColor(255, 255, 255))
         self.setPalette(palette)
         self.setMinimumSize(300, 200)
+
+    def set_display_mode(self, mode):
+        """Set how the live viewer renders selected bits."""
+        if mode == self.display_mode:
+            return
+        self.display_mode = mode
+        self.update_size()
+        self.update()
+
+    def set_size_value(self, size_value):
+        """Set the requested size scaling for the live viewer."""
+        size_value = max(4, int(size_value))
+        if size_value == self.size_value:
+            return
+        self.size_value = size_value
+        if self.frames_bits:
+            self.set_frame_bits(self.frames_bits)
+        else:
+            self.update()
 
     def set_frame_bits(self, frames_bits):
         """Set bits to display. frames_bits: list of numpy arrays, one per frame."""
@@ -379,13 +379,17 @@ class LiveBitViewerCanvas(QWidget):
 
         self.max_frame_bits = max(len(fb) for fb in frames_bits)
 
-        available_width = self.width() - 60
-        if available_width < 100:
-            available_width = 300
-        if self.max_frame_bits > 0:
-            self.bit_size = max(3, min(12, available_width // self.max_frame_bits))
+        if self.display_mode in {"binary", "hex"}:
+            self.bit_size = max(6, self.size_value)
         else:
-            self.bit_size = 8
+            available_width = self.width() - 60
+            if available_width < 100:
+                available_width = 300
+            if self.max_frame_bits > 0:
+                fitted_size = max(3, min(12, available_width // self.max_frame_bits))
+                self.bit_size = min(max(3, self.size_value), fitted_size)
+            else:
+                self.bit_size = self.size_value
 
         self.update_size()
         self.update()
@@ -394,16 +398,24 @@ class LiveBitViewerCanvas(QWidget):
         if not self.frames_bits or self.max_frame_bits == 0:
             self.setMinimumSize(300, 100)
             return
-        width = self.max_frame_bits * self.bit_size + 60
-        height = len(self.frames_bits) * self.bit_size
+        if self.display_mode == "binary":
+            width = max(300, 55 + (self.max_frame_bits * max(7, self.bit_size // 2 + 3)))
+            height = len(self.frames_bits) * (self.bit_size + 8)
+        elif self.display_mode == "hex":
+            hex_chars = max(1, (self.max_frame_bits + 3) // 4)
+            width = max(300, 55 + (hex_chars * max(9, self.bit_size + 1)))
+            height = len(self.frames_bits) * (self.bit_size + 8)
+        else:
+            width = self.max_frame_bits * self.bit_size + 60
+            height = len(self.frames_bits) * self.bit_size
         self.setMinimumSize(width, height)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if self.frames_bits and self.max_frame_bits > 0:
+        if self.frames_bits and self.max_frame_bits > 0 and self.display_mode in {"squares", "circles"}:
             available_width = event.size().width() - 60
             if available_width > 0:
-                new_bit_size = max(3, min(12, available_width // self.max_frame_bits))
+                new_bit_size = min(max(3, self.size_value), max(3, min(12, available_width // self.max_frame_bits)))
                 if new_bit_size != self.bit_size:
                     self.bit_size = new_bit_size
                     self.update_size()
@@ -421,12 +433,13 @@ class LiveBitViewerCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         for frame_idx, frame_bits in enumerate(self.frames_bits):
-            y = frame_idx * self.bit_size
+            row_height = self.bit_size if self.display_mode in {"squares", "circles"} else (self.bit_size + 8)
+            y = frame_idx * row_height
 
             painter.setPen(QColor(100, 100, 100))
             painter.setFont(QFont("Courier", 7))
             painter.drawText(
-                QRect(0, y, 50, self.bit_size),
+                QRect(0, y, 50, row_height),
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
                 f"F{frame_idx}"
             )
@@ -435,6 +448,27 @@ class LiveBitViewerCanvas(QWidget):
             if len(padded_bits) < self.max_frame_bits:
                 padding = np.zeros(self.max_frame_bits - len(padded_bits), dtype=np.uint8)
                 padded_bits = np.concatenate([padded_bits, padding])
+
+            if self.display_mode in {"binary", "hex"}:
+                painter.setPen(QColor(20, 20, 20))
+                painter.setFont(QFont("Consolas", max(8, self.bit_size)))
+                if self.display_mode == "binary":
+                    text = "".join(str(int(bit)) for bit in frame_bits.tolist())
+                else:
+                    padded_len = ((len(frame_bits) + 3) // 4) * 4
+                    text_bits = np.pad(frame_bits, (0, padded_len - len(frame_bits)), constant_values=0)
+                    chars = []
+                    for idx in range(0, len(text_bits), 4):
+                        nibble = text_bits[idx:idx + 4]
+                        value = (int(nibble[0]) << 3) | (int(nibble[1]) << 2) | (int(nibble[2]) << 1) | int(nibble[3])
+                        chars.append(f"{value:X}")
+                    text = "".join(chars)
+                painter.drawText(
+                    QRect(55, y, max(200, self.width() - 60), row_height),
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                    text,
+                )
+                continue
 
             for bit_idx in range(len(padded_bits)):
                 bit = padded_bits[bit_idx]

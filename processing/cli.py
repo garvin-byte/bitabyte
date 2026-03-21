@@ -27,6 +27,8 @@ import subprocess
 import os
 from typing import List, Tuple, Union
 
+from common.bit_utils import bits_from_binary_string, bits_from_hex_string, parse_tap_list
+
 
 class BitProcessorCLI:
     def __init__(self):
@@ -62,26 +64,94 @@ class BitProcessorCLI:
             sys.exit(1)
 
     def hex_to_bits(self, hex_string: str) -> np.ndarray:
-        """Convert hex string to bit array"""
-        if hex_string.startswith('0x') or hex_string.startswith('0X'):
-            hex_string = hex_string[2:]
-
-        try:
-            value = int(hex_string, 16)
-            bit_length = len(hex_string) * 4
-            binary_str = format(value, f'0{bit_length}b')
-            return np.array([int(b) for b in binary_str], dtype=np.uint8)
-        except ValueError:
+        """Convert hex string to bit array."""
+        bits = bits_from_hex_string(hex_string)
+        if bits is None:
             print(f"Error: Invalid hex pattern '{hex_string}'")
             sys.exit(1)
+        return bits
 
     def binary_to_bits(self, binary_string: str) -> np.ndarray:
-        """Convert binary string to bit array"""
-        try:
-            return np.array([int(b) for b in binary_string], dtype=np.uint8)
-        except ValueError:
+        """Convert binary string to bit array."""
+        bits = bits_from_binary_string(binary_string)
+        if bits is None:
             print(f"Error: Invalid binary pattern '{binary_string}'")
             sys.exit(1)
+        return bits
+
+    def parse_pattern_bits(self, pattern_string: str) -> np.ndarray:
+        """Parse a CLI bit pattern, using hex when prefixed with ``0x``."""
+        if pattern_string.startswith(('0x', '0X')):
+            return self.hex_to_bits(pattern_string)
+        return self.binary_to_bits(pattern_string)
+
+    def _sync_error_suffix(self, error_percent: int) -> str:
+        return f" (even with +/-{error_percent}% tolerance)" if error_percent > 0 else ""
+
+    def _fail_missing_pattern(self, label: str, pattern_string: str, error_percent: int) -> None:
+        print(f"Error: {label} '{pattern_string}' not found{self._sync_error_suffix(error_percent)}")
+        sys.exit(1)
+
+    def _find_or_fail(
+        self,
+        data: np.ndarray,
+        pattern: np.ndarray,
+        pattern_string: str,
+        *,
+        label: str,
+        error_percent: int = 0,
+    ) -> List[int]:
+        positions = self.find_sync_pattern(data, pattern, error_percent)
+        if not positions:
+            self._fail_missing_pattern(label, pattern_string, error_percent)
+        return positions
+
+    def _pad_frames(self, frames: List[np.ndarray]) -> np.ndarray:
+        if not frames:
+            print("Error: No valid frames found")
+            sys.exit(1)
+
+        max_len = max(len(frame) for frame in frames)
+        padded_frames = [
+            np.concatenate([frame, np.zeros(max_len - len(frame), dtype=np.uint8)])
+            if len(frame) < max_len else frame
+            for frame in frames
+        ]
+        return np.concatenate(padded_frames)
+
+    def _extract_frames_from_sync_positions(
+        self,
+        data: np.ndarray,
+        positions: List[int],
+        minimum_length: int,
+    ) -> List[np.ndarray]:
+        frames = []
+        for index, start_pos in enumerate(positions):
+            end_pos = positions[index + 1] if index + 1 < len(positions) else len(data)
+            frame = data[start_pos:end_pos]
+            if len(frame) >= minimum_length:
+                frames.append(frame)
+        return frames
+
+    def _extract_frames_between_patterns(
+        self,
+        data: np.ndarray,
+        start_positions: List[int],
+        stop_positions: List[int],
+        stop_pattern_length: int,
+    ) -> List[np.ndarray]:
+        frames = []
+        next_stop_index = 0
+
+        for start_pos in start_positions:
+            while next_stop_index < len(stop_positions) and stop_positions[next_stop_index] <= start_pos:
+                next_stop_index += 1
+            if next_stop_index >= len(stop_positions):
+                break
+            stop_pos = stop_positions[next_stop_index]
+            frames.append(data[start_pos:stop_pos + stop_pattern_length])
+
+        return frames
 
     def find_sync_pattern(self, data: np.ndarray, pattern: np.ndarray, error_percent: int = 0) -> List[int]:
         """Find all sync pattern positions with optional error tolerance"""
@@ -110,10 +180,7 @@ class BitProcessorCLI:
                    skip_pattern: bool = False, error_percent: int = 0) -> np.ndarray:
         """Apply sync operation with optional skip and error tolerance"""
         # Determine if hex or binary
-        if pattern_str.startswith('0x') or pattern_str.startswith('0X'):
-            pattern = self.hex_to_bits(pattern_str)
-        else:
-            pattern = self.binary_to_bits(pattern_str)
+        pattern = self.parse_pattern_bits(pattern_str)
 
         positions = self.find_sync_pattern(data, pattern, error_percent)
 
@@ -336,10 +403,7 @@ class BitProcessorCLI:
 
     def apply_xor(self, data: np.ndarray, pattern_str: str) -> np.ndarray:
         """Apply XOR with pattern"""
-        if pattern_str.startswith('0x') or pattern_str.startswith('0X'):
-            pattern = self.hex_to_bits(pattern_str)
-        else:
-            pattern = self.binary_to_bits(pattern_str)
+        pattern = self.parse_pattern_bits(pattern_str)
 
         if len(pattern) == 0:
             return data
@@ -351,10 +415,8 @@ class BitProcessorCLI:
 
     def apply_LRS(self, data: np.ndarray, taps_str: str) -> np.ndarray:
         """Apply feedthrough LRS descrambler"""
-        taps_str = taps_str.replace(',', ' ')
-        try:
-            taps = [int(t.strip()) for t in taps_str.split() if t.strip()]
-        except ValueError:
+        taps = parse_tap_list(taps_str)
+        if taps is None:
             print(f"Error: Invalid LRS tap format '{taps_str}'")
             sys.exit(1)
 
@@ -383,10 +445,8 @@ class BitProcessorCLI:
 
     def apply_LRS_additive(self, data: np.ndarray, taps_str: str, fill_str: str, length: int) -> np.ndarray:
         """Apply additive LRS"""
-        taps_str = taps_str.replace(',', ' ')
-        try:
-            taps = [int(t.strip()) for t in taps_str.split() if t.strip()]
-        except ValueError:
+        taps = parse_tap_list(taps_str)
+        if taps is None:
             print(f"Error: Invalid LRS tap format '{taps_str}'")
             sys.exit(1)
 
@@ -398,10 +458,7 @@ class BitProcessorCLI:
             print(f"Error: LRS tap points must be >= 0")
             sys.exit(1)
 
-        if fill_str.startswith('0x') or fill_str.startswith('0X'):
-            fill_bits = self.hex_to_bits(fill_str)
-        else:
-            fill_bits = self.binary_to_bits(fill_str)
+        fill_bits = self.parse_pattern_bits(fill_str)
 
         if fill_bits is None or len(fill_bits) == 0:
             print(f"Error: Invalid initial fill format '{fill_str}'")
@@ -676,12 +733,7 @@ class BitProcessorCLI:
                 current_data = self.apply_sync(current_data, op_value, occurrence, skip_pattern, error_percent)
 
             elif op_type == 'zeropad_frame':
-                # Parse pattern
-                if op_value.startswith('0x') or op_value.startswith('0X'):
-                    pattern = self.hex_to_bits(op_value)
-                else:
-                    pattern = self.binary_to_bits(op_value)
-                # Use existing sync error tolerance if set
+                pattern = self.parse_pattern_bits(op_value)
                 error_percent = getattr(self, '_sync_error', 0)
                 positions = self.find_sync_pattern(current_data, pattern, error_percent)
                 if not positions:
@@ -691,32 +743,9 @@ class BitProcessorCLI:
                     else:
                         print(f"Error: Frame sync pattern '{op_value}' not found")
                     sys.exit(1)
-                # Extract frames
-                frames = []
-                pattern_len = len(pattern)
-                for j, pos in enumerate(positions):
-                    start_pos = pos  # Start at the pattern itself
-                    if j + 1 < len(positions):
-                        end_pos = positions[j + 1]
-                    else:
-                        end_pos = len(current_data)
-                    frame = current_data[start_pos:end_pos]
-                    # Only add frames that have meaningful length
-                    if len(frame) >= pattern_len:
-                        frames.append(frame)
-                if not frames:
-                    print(f"Error: No valid frames found")
-                    sys.exit(1)
+                frames = self._extract_frames_from_sync_positions(current_data, positions, len(pattern))
+                current_data = self._pad_frames(frames)
                 max_len = max(len(frame) for frame in frames)
-                padded_frames = []
-                for frame in frames:
-                    if len(frame) < max_len:
-                        padding = np.zeros(max_len - len(frame), dtype=np.uint8)
-                        padded_frame = np.concatenate([frame, padding])
-                    else:
-                        padded_frame = frame
-                    padded_frames.append(padded_frame)
-                current_data = np.concatenate(padded_frames)
                 print(f"  Extracted {len(frames)} frames, padded to {max_len} bits each")
             elif op_type == 'delta':
                 window = int(op_value) if op_value else 1
@@ -800,15 +829,8 @@ class BitProcessorCLI:
                 start_pattern_str = parts[0]
                 stop_pattern_str = parts[1]
 
-                if start_pattern_str.startswith('0x') or start_pattern_str.startswith('0X'):
-                    start_pattern = self.hex_to_bits(start_pattern_str)
-                else:
-                    start_pattern = self.binary_to_bits(start_pattern_str)
-
-                if stop_pattern_str.startswith('0x') or stop_pattern_str.startswith('0X'):
-                    stop_pattern = self.hex_to_bits(stop_pattern_str)
-                else:
-                    stop_pattern = self.binary_to_bits(stop_pattern_str)
+                start_pattern = self.parse_pattern_bits(start_pattern_str)
+                stop_pattern = self.parse_pattern_bits(stop_pattern_str)
 
                 # Use existing sync error tolerance if set
                 error_percent = getattr(self, '_sync_error', 0)
@@ -831,36 +853,19 @@ class BitProcessorCLI:
                         print(f"Error: Stop pattern '{stop_pattern_str}' not found")
                     sys.exit(1)
 
-                # Extract frames from start to stop
-                frames = []
-                start_len = len(start_pattern)
-                stop_len = len(stop_pattern)
-
-                for start_pos in start_positions:
-                    # Find the first stop position after this start
-                    matching_stops = [s for s in stop_positions if s > start_pos]
-
-                    if matching_stops:
-                        stop_pos = matching_stops[0]
-                        # Include from start pattern through end of stop pattern
-                        frame = current_data[start_pos:stop_pos + stop_len]
-                        frames.append(frame)
+                frames = self._extract_frames_between_patterns(
+                    current_data,
+                    start_positions,
+                    stop_positions,
+                    len(stop_pattern),
+                )
 
                 if not frames:
                     print(f"Error: No valid start/stop frame pairs found")
                     sys.exit(1)
 
                 max_len = max(len(frame) for frame in frames)
-                padded_frames = []
-                for frame in frames:
-                    if len(frame) < max_len:
-                        padding = np.zeros(max_len - len(frame), dtype=np.uint8)
-                        padded_frame = np.concatenate([frame, padding])
-                    else:
-                        padded_frame = frame
-                    padded_frames.append(padded_frame)
-
-                current_data = np.concatenate(padded_frames)
+                current_data = self._pad_frames(frames)
                 print(f"  Extracted {len(frames)} frames (start→stop), padded to {max_len} bits each")
 
             print(f"  Output length: {len(current_data)} bits")

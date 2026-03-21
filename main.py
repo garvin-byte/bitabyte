@@ -12,22 +12,22 @@ Usage:
 import sys
 
 
-def launch_viewer():
+def _launch_qt_window(window_class):
     from PyQt6.QtWidgets import QApplication
-    from viewer.window import BitViewerWindow
     app = QApplication(sys.argv)
-    window = BitViewerWindow()
+    window = window_class()
     window.show()
     sys.exit(app.exec())
+
+
+def launch_viewer():
+    from viewer.window import BitViewerWindow
+    _launch_qt_window(BitViewerWindow)
 
 
 def launch_nextgen():
-    from PyQt6.QtWidgets import QApplication
     from nextgen.main_window import NextGenBitViewerWindow
-    app = QApplication(sys.argv)
-    window = NextGenBitViewerWindow()
-    window.show()
-    sys.exit(app.exec())
+    _launch_qt_window(NextGenBitViewerWindow)
 
 
 def launch_generator():
