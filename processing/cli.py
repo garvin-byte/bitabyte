@@ -26,8 +26,11 @@ import re
 import subprocess
 import os
 from typing import List, Tuple, Union
+from numpy.lib.stride_tricks import as_strided
 
 from common.bit_utils import bits_from_binary_string, bits_from_hex_string, parse_tap_list
+
+PATTERN_SCAN_MAX_ELEMENTS = 4_000_000
 
 
 class BitProcessorCLI:
@@ -153,28 +156,58 @@ class BitProcessorCLI:
 
         return frames
 
+    def _scan_sync_pattern_positions(
+        self,
+        data: np.ndarray,
+        pattern: np.ndarray,
+        max_errors: int = 0,
+    ) -> List[int]:
+        """Find all pattern positions using blocked vectorized comparisons."""
+        if data is None or pattern is None:
+            return []
+
+        data_array = np.ascontiguousarray(np.asarray(data, dtype=np.uint8))
+        pattern_array = np.ascontiguousarray(np.asarray(pattern, dtype=np.uint8))
+        pattern_len = len(pattern_array)
+
+        if pattern_len == 0 or pattern_len > len(data_array):
+            return []
+
+        stride = data_array.strides[0]
+        num_windows = len(data_array) - pattern_len + 1
+        windows = as_strided(
+            data_array,
+            shape=(num_windows, pattern_len),
+            strides=(stride, stride),
+            writeable=False,
+        )
+
+        max_block = max(1, PATTERN_SCAN_MAX_ELEMENTS // pattern_len)
+        positions = []
+
+        for block_start in range(0, num_windows, max_block):
+            block = windows[block_start:block_start + max_block]
+            if block.size == 0:
+                break
+
+            if max_errors == 0:
+                matches = np.all(block == pattern_array, axis=1)
+            else:
+                matches = np.count_nonzero(block != pattern_array, axis=1) <= max_errors
+
+            if np.any(matches):
+                match_offsets = np.flatnonzero(matches)
+                positions.extend((block_start + match_offsets).tolist())
+
+        return positions
+
     def find_sync_pattern(self, data: np.ndarray, pattern: np.ndarray, error_percent: int = 0) -> List[int]:
         """Find all sync pattern positions with optional error tolerance"""
-        positions = []
         pattern_len = len(pattern)
 
         # Calculate maximum allowed bit errors
         max_errors = int((error_percent / 100.0) * pattern_len)
-
-        for i in range(len(data) - pattern_len + 1):
-            segment = data[i:i + pattern_len]
-
-            if max_errors == 0:
-                # Exact match
-                if np.array_equal(segment, pattern):
-                    positions.append(i)
-            else:
-                # Count bit differences
-                differences = np.sum(segment != pattern)
-                if differences <= max_errors:
-                    positions.append(i)
-
-        return positions
+        return self._scan_sync_pattern_positions(data, pattern, max_errors=max_errors)
 
     def apply_sync(self, data: np.ndarray, pattern_str: str, occurrence: int = 0,
                    skip_pattern: bool = False, error_percent: int = 0) -> np.ndarray:

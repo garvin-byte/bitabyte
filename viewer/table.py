@@ -13,11 +13,11 @@ from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, QScrollA
                               QListWidgetItem, QMessageBox, QPushButton, QLineEdit,
                               QInputDialog, QButtonGroup, QRadioButton, QDockWidget)
 from PyQt6.QtCore import Qt, QRect, QSize
-from PyQt6.QtGui import QColor, QPen, QBrush, QFont, QPainter, QIcon, QPixmap
+from PyQt6.QtGui import QColor, QPen, QBrush, QFont, QFontMetrics, QPainter, QIcon, QPixmap
 from .colors import (COLOR_OPTIONS, COLOR_NAME_TO_QCOLOR, BIT_SYNC_WARNING_BYTES,
                      BIT_SYNC_HARD_LIMIT_BYTES, MAX_SYNC_FRAMES,
-                     PATTERN_SCAN_MAX_ELEMENTS, _populate_color_combo)
-from .column import ColumnDefinition, AddColumnDialog
+                     PATTERN_SCAN_MAX_ELEMENTS)
+from .column import ColumnDefinition
 
 
 
@@ -105,6 +105,12 @@ class ByteStructuredTableWidget(QTableWidget):
         self.setHorizontalScrollMode(QTableWidget.ScrollMode.ScrollPerPixel)
         self.setWordWrap(True)
         self.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
+        header = self.horizontalHeader()
+        header.setVisible(False)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        header.setMinimumSectionSize(8)
 
         # Virtual row rendering state
         self._display_meta = None        # metadata for lazy row population
@@ -143,6 +149,7 @@ class ByteStructuredTableWidget(QTableWidget):
         self._bit_cache = None
         self._bit_cache_source_id = None
         self._bit_cache_length = 0
+        self._active_column_resize = None
 
     def focusOutEvent(self, event):
         """Clear column selection when focus is lost (clicked outside table)."""
@@ -185,6 +192,17 @@ class ByteStructuredTableWidget(QTableWidget):
         """Handle mouse press - show context menu ONLY on right-click."""
         from PyQt6.QtCore import Qt
 
+        if event.button() == Qt.MouseButton.LeftButton:
+            resize_col = self._header_resize_hit_test(event.pos())
+            if resize_col is not None:
+                self._active_column_resize = {
+                    "column": resize_col,
+                    "start_x": event.pos().x(),
+                    "initial_width": self.columnWidth(resize_col),
+                }
+                self.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+                return
+
         # Get the cell at this position
         item = self.itemAt(event.pos())
         if item:
@@ -205,12 +223,45 @@ class ByteStructuredTableWidget(QTableWidget):
             if item:
                 self._on_cell_clicked(row, col)
 
+    def mouseMoveEvent(self, event):
+        """Resize columns from the in-grid header rows and show resize cursor."""
+        if self._active_column_resize is not None:
+            resize_col = self._active_column_resize["column"]
+            delta_x = event.pos().x() - self._active_column_resize["start_x"]
+            new_width = max(
+                self.horizontalHeader().minimumSectionSize(),
+                self._active_column_resize["initial_width"] + delta_x,
+            )
+            self.setColumnWidth(resize_col, new_width)
+            return
+
+        resize_col = self._header_resize_hit_test(event.pos())
+        if resize_col is not None:
+            self.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+        else:
+            self.viewport().unsetCursor()
+
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """Finish custom in-grid header resizing."""
+        if self._active_column_resize is not None:
+            self._active_column_resize = None
+            resize_col = self._header_resize_hit_test(event.pos())
+            if resize_col is not None:
+                self.viewport().setCursor(Qt.CursorShape.SplitHCursor)
+            else:
+                self.viewport().unsetCursor()
+            return
+
+        super().mouseReleaseEvent(event)
+
     def _on_cell_double_clicked(self, row, col):
         """
         Handle double-click on header labels:
         - If this column belongs to an existing ColumnDefinition -> open edit dialog
         - If this column is an undefined '?' region -> open a 'define bits' dialog
-        - If this column is part of a split -> allow editing the split label
+        - If this column is part of a split -> open the regular definition dialog
         """
         # Only react on the top label row
         if row != 0:
@@ -224,7 +275,7 @@ class ByteStructuredTableWidget(QTableWidget):
         # Check if this column is part of a split
         split_col_info = self._find_split_for_column(col)
         if split_col_info is not None:
-            # This is a split column - allow editing the label
+            # This is a split column - edit it through the standard definition dialog.
             self._edit_split_label(split_col_info)
             return
 
@@ -254,9 +305,17 @@ class ByteStructuredTableWidget(QTableWidget):
         from PyQt6.QtCore import QEvent
         from PyQt6.QtGui import QMouseEvent
 
+        if source == self.viewport():
+            if event.type() == QEvent.Type.Leave and self._active_column_resize is None:
+                self.viewport().unsetCursor()
+            if event.type() == QEvent.Type.MouseButtonPress and self._active_column_resize is not None:
+                return True
+
         if source == self.viewport() and event.type() == QEvent.Type.MouseButtonPress:
             if isinstance(event, QMouseEvent):
                 pos = event.pos()
+                if self._header_resize_hit_test(pos) is not None:
+                    return False
                 item = self.itemAt(pos)
 
                 if item is None:
@@ -268,6 +327,29 @@ class ByteStructuredTableWidget(QTableWidget):
                     return False
 
         return super().eventFilter(source, event)
+
+    def _header_resize_hit_test(self, pos):
+        """Return the logical column whose right edge should resize, if any."""
+        if pos is None or self.columnCount() <= 0:
+            return None
+
+        row = self.rowAt(pos.y())
+        if row < 1 or row >= self.HEADER_ROW_COUNT:
+            return None
+
+        col = self.columnAt(pos.x())
+        if col < 0:
+            return None
+
+        margin = 4
+        left_edge = self.columnViewportPosition(col)
+        right_edge = left_edge + self.columnWidth(col)
+
+        if col > 0 and abs(pos.x() - left_edge) <= margin:
+            return col - 1
+        if abs(pos.x() - right_edge) <= margin:
+            return col
+        return None
 
     def _on_cell_clicked(self, _row, col):
         """Handle cell click - select ONLY that column (clears previous)."""
@@ -374,6 +456,36 @@ class ByteStructuredTableWidget(QTableWidget):
             inspector_widget.set_frames_bits([])
         if stats_widget:
             stats_widget.set_frames_bits([])
+
+    def _column_bits_for_live_viewer(self, frame_bytes, byte_idx, bit_start, bit_end):
+        """Return the selected column's bits in the same left-to-right order as the table."""
+        if frame_bytes is None or byte_idx < 0 or byte_idx >= len(frame_bytes):
+            return []
+
+        start = min(bit_start, bit_end)
+        end = max(bit_start, bit_end)
+        byte_val = int(frame_bytes[byte_idx])
+        bits = []
+
+        if self._byte_has_split(byte_idx):
+            for split_bit in range(end, start - 1, -1):
+                bits.append((byte_val >> split_bit) & 1)
+            return bits
+
+        for local_bit in range(start, end + 1):
+            actual_bit = 7 - local_bit
+            bits.append((byte_val >> actual_bit) & 1)
+        return bits
+
+    def _format_range_label(self, start_value, end_value):
+        """Format a header range label, collapsing single-value spans to one number."""
+        if start_value == end_value:
+            return str(start_value)
+        return f"{start_value}-{end_value}"
+
+    def _format_subbit_label(self, start_bit, end_bit):
+        """Format a sub-bit header label, collapsing single-bit spans to one number."""
+        return self._format_range_label(start_bit, end_bit)
 
     def _expand_selected_definition_columns(self, selected_cols):
         """Expand a selection to include every table column for the selected definitions."""
@@ -825,33 +937,34 @@ class ByteStructuredTableWidget(QTableWidget):
             selected_cols: Set of column indices to split
             split_type: 'binary' for 8 columns (or 4 for nibbles), 'nibble' for 2 columns
         """
-        # Determine the label based on split type
-        label = "BIN 0" if split_type == 'binary' else "Nibble"
+        label = "Nibble"
         split_color = self._next_split_color_name()
 
         if split_type == 'binary':
             binary_targets = self._resolve_binary_split_targets(selected_cols)
             if binary_targets:
-                for byte_idx, target in binary_targets.items():
+                for byte_idx, target in sorted(binary_targets.items()):
                     self.split_columns.pop(byte_idx, None)
                     self.split_columns.pop((byte_idx, 'high'), None)
                     self.split_columns.pop((byte_idx, 'low'), None)
 
                     if target["full_byte"]:
+                        split_label, next_binary_label = self._allocate_binary_split_label()
                         self.split_columns[byte_idx] = {
                             'type': 'binary',
-                            'label': label,
+                            'label': split_label,
                             'color': split_color,
-                            'next_binary_label': 1,
+                            'next_binary_label': next_binary_label,
                             'next_nibble_label': 0,
                         }
                         continue
 
                     for nibble_type in sorted(target["nibbles"]):
                         bit_start = 4 if nibble_type == 'high' else 0
+                        split_label, _ = self._allocate_binary_split_label()
                         self.split_columns[(byte_idx, nibble_type)] = {
                             'type': 'nibble_binary',
-                            'label': label,
+                            'label': split_label,
                             'color': split_color,
                             'bit_start': bit_start,
                         }
@@ -875,11 +988,15 @@ class ByteStructuredTableWidget(QTableWidget):
         # IMPORTANT: Store by byte index, not column index, since column indices change after splitting
         if not self._all_columns_info:
             # Simple case: columns are bytes directly
-            for col in selected_cols:
+            for col in sorted(selected_cols):
                 # Store by byte index (which is the same as col in this case)
-                self.split_columns[col] = {'type': split_type, 'label': label, 'color': split_color}
+                split_label = label
+                next_binary_label = 0
                 if split_type == 'binary':
-                    self.split_columns[col]['next_binary_label'] = 1
+                    split_label, next_binary_label = self._allocate_binary_split_label()
+                self.split_columns[col] = {'type': split_type, 'label': split_label, 'color': split_color}
+                if split_type == 'binary':
+                    self.split_columns[col]['next_binary_label'] = next_binary_label
                     self.split_columns[col]['next_nibble_label'] = 0
         else:
             # Need to map table columns to byte/nibble indices
@@ -887,7 +1004,7 @@ class ByteStructuredTableWidget(QTableWidget):
             nibble_byte_idx = selection_info["nibble_byte_idx"]
             selected_nibble_type = selection_info["selected_nibble_type"]
             selected_bit_range = selection_info["selected_bit_range"]
-            for col in selected_cols:
+            for col in sorted(selected_cols):
                 if col < len(self._all_columns_info):
                     byte_idx, bit_start, bit_end, col_def, is_undef = self._all_columns_info[col]
                     num_bits = bit_end - bit_start + 1
@@ -954,16 +1071,26 @@ class ByteStructuredTableWidget(QTableWidget):
                         break
                     # Full byte column - can split into binary (8) or nibble (2)
                     if bit_start == 0 and bit_end == 7 and col_def is None:
-                        self.split_columns[byte_idx] = {'type': split_type, 'label': label, 'color': split_color}
+                        split_label = label
+                        next_binary_label = 0
                         if split_type == 'binary':
-                            self.split_columns[byte_idx]['next_binary_label'] = 1
+                            split_label, next_binary_label = self._allocate_binary_split_label()
+                        self.split_columns[byte_idx] = {'type': split_type, 'label': split_label, 'color': split_color}
+                        if split_type == 'binary':
+                            self.split_columns[byte_idx]['next_binary_label'] = next_binary_label
                             self.split_columns[byte_idx]['next_nibble_label'] = 0
                     # Nibble column (4 bits) - can split into binary (4)
                     elif num_bits == 4 and split_type == 'binary' and col_def is None:
                         # Store with a nibble key: (byte_idx, 'high'/'low')
                         nibble_type = 'high' if bit_start == 4 else 'low'
                         nibble_key = (byte_idx, nibble_type)
-                        self.split_columns[nibble_key] = {'type': 'nibble_binary', 'label': label, 'color': split_color, 'bit_start': bit_start}
+                        split_label, _ = self._allocate_binary_split_label()
+                        self.split_columns[nibble_key] = {
+                            'type': 'nibble_binary',
+                            'label': split_label,
+                            'color': split_color,
+                            'bit_start': bit_start,
+                        }
 
         # Clear selection and refresh display
         self.selected_columns.clear()
@@ -1430,6 +1557,28 @@ class ByteStructuredTableWidget(QTableWidget):
         split_info["next_binary_label"] = next_binary_label
         split_info["next_nibble_label"] = next_nibble_label
 
+    def _next_split_label_index(self, label_kind):
+        """Return the next available numeric suffix for BIN/NIBBLE split labels."""
+        pattern = re.compile(rf"^{re.escape(label_kind)}\s+(\d+)$", re.IGNORECASE)
+        next_index = 0
+
+        for split_info in self.split_columns.values():
+            candidate_labels = [split_info.get("label", "")]
+            for segment in split_info.get("segments", []):
+                candidate_labels.append(segment.get("label", ""))
+
+            for candidate_label in candidate_labels:
+                match = pattern.match(str(candidate_label).strip())
+                if match:
+                    next_index = max(next_index, int(match.group(1)) + 1)
+
+        return next_index
+
+    def _allocate_binary_split_label(self):
+        """Allocate the next unique BIN label and return its next counter value."""
+        label_index = self._next_split_label_index("BIN")
+        return f"BIN {label_index}", label_index + 1
+
     def _remove_custom_split_segment(self, split_key, segment_start, segment_end):
         """Convert a custom split segment back to binary while preserving the rest."""
         split_info = self.split_columns.get(split_key)
@@ -1487,9 +1636,13 @@ class ByteStructuredTableWidget(QTableWidget):
         # Resize only definition-spanned columns (typically few)
         for start_col, span_len, col_def in field_spans:
             if col_def is not None:
-                # Give definition columns a bit more room
+                total_width = self._definition_span_width(col_def)
+                per_section_width = max(
+                    self.horizontalHeader().minimumSectionSize(),
+                    math.ceil(total_width / max(1, span_len)),
+                )
                 for i in range(span_len):
-                    self.setColumnWidth(start_col + i, max(30, DEFAULT_COL_WIDTH))
+                    self.setColumnWidth(start_col + i, per_section_width)
 
         # Narrow split columns
         for start_col, label_info in split_labels.items():
@@ -1497,94 +1650,104 @@ class ByteStructuredTableWidget(QTableWidget):
             for i in range(span_width):
                 self.setColumnWidth(start_col + i, 24)
 
+    def _set_compact_horizontal_headers(self, num_table_cols, label_spans):
+        """Show a minimal unlabeled resize strip above the custom header rows."""
+        self.setHorizontalHeaderLabels([""] * num_table_cols)
+
+    def _estimated_definition_value_text(self, col_def):
+        """Approximate the widest rendered value for a definition."""
+        total_bits = max(1, col_def.total_bits)
+        byte_count = max(1, col_def.end_byte - col_def.start_byte + 1)
+
+        fmt = col_def.display_format
+        if fmt == "hex":
+            fmt = "hex_be"
+        if fmt == "ascii":
+            fmt = "ascii_be"
+
+        if fmt in ("hex_be", "hex_le"):
+            if col_def.unit == "byte":
+                return " ".join("FF" for _ in range(byte_count))
+            return "F" * ((total_bits + 3) // 4)
+
+        if fmt == "binary":
+            if col_def.unit == "byte":
+                return " ".join("00000000" for _ in range(byte_count))
+            return "0" * total_bits
+
+        if fmt in ("ascii_be", "ascii_le"):
+            return "W" * byte_count
+
+        if fmt in ("dec_be", "dec_le"):
+            digits = max(1, math.floor(total_bits * math.log10(2)) + 1)
+            return "9" * digits
+
+        if fmt in ("tc_be", "tc_le"):
+            digits = max(1, math.floor(max(1, total_bits - 1) * math.log10(2)) + 1)
+            return "-" + ("9" * digits)
+
+        return "FF"
+
+    def _definition_span_width(self, col_def):
+        """Estimate a reasonable total width for a spanned definition column."""
+        label_text = str(col_def.label or "")
+        byte_text = self._format_range_label(col_def.start_byte, col_def.end_byte)
+        bit_text = self._format_range_label(0, max(0, col_def.total_bits - 1))
+        value_text = self._estimated_definition_value_text(col_def)
+
+        label_metrics = QFontMetrics(QFont("Segoe UI", self.display_font_size, QFont.Weight.Bold))
+        mono_metrics = QFontMetrics(QFont("Consolas", max(8, self.display_font_size - 1)))
+        data_metrics = QFontMetrics(self.font())
+
+        return max(
+            24,
+            label_metrics.horizontalAdvance(label_text) + 16,
+            mono_metrics.horizontalAdvance(byte_text) + 16,
+            mono_metrics.horizontalAdvance(bit_text) + 16,
+            data_metrics.horizontalAdvance(value_text) + 16,
+        )
+
     def _find_split_for_column(self, col):
-        """Find if a column is part of a split and return the byte index.
+        """Find the split payload represented by a table column.
 
         Args:
             col: The table column index to check
 
         Returns:
-            The byte index from split_columns dict, or None if not a split
+            A split payload understood by the sidebar editor, or None if not a split
         """
         if not self._all_columns_info or col >= len(self._all_columns_info):
             return None
 
-        # Get the byte index for this column
         byte_idx, bit_start, bit_end, col_def, is_undef = self._all_columns_info[col]
+        if col_def is not None or is_undef:
+            return None
 
-        # Check if this byte has a split (splits are stored by byte index)
-        if byte_idx in self.split_columns:
-            # Check if this column is actually part of the split (not a column definition)
-            if col_def is None and not is_undef and (bit_start != 0 or bit_end != 7):
-                return byte_idx
+        custom_segment = self._custom_split_segment(byte_idx, bit_start, bit_end)
+        if custom_segment is not None:
+            return ("segment", byte_idx, custom_segment["start"], custom_segment["end"])
+
+        split_info = self.split_columns.get(byte_idx)
+        if split_info and split_info.get("type") in {"binary", "nibble"} and (bit_start != 0 or bit_end != 7):
+            return byte_idx
+
+        if bit_end - bit_start == 0:
+            nibble_type = "high" if bit_start >= 4 else "low"
+            nibble_info = self.split_columns.get((byte_idx, nibble_type))
+            if nibble_info and nibble_info.get("type") == "nibble_binary":
+                return (byte_idx, nibble_type)
 
         return None
 
-    def _edit_split_label(self, byte_idx):
-        """Open a dialog to edit the split label and color, or remove the split.
+    def _edit_split_label(self, payload):
+        """Route split edits through the normal column-definition editor.
 
         Args:
-            byte_idx: The byte index key in split_columns dict
+            payload: Split payload resolved by _find_split_for_column
         """
-        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, QPushButton, QDialogButtonBox
-
-        if byte_idx not in self.split_columns:
+        if self.parent_window is None or not hasattr(self.parent_window, "edit_split_as_definition"):
             return
-
-        split_info = self.split_columns[byte_idx]
-        current_label = split_info['label']
-        current_color = split_info.get('color', 'None')
-
-        # Create dialog
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Edit Split")
-        layout = QVBoxLayout()
-
-        # Label field
-        label_layout = QHBoxLayout()
-        label_layout.addWidget(QLabel("Label:"))
-        label_edit = QLineEdit(current_label)
-        label_layout.addWidget(label_edit)
-        layout.addLayout(label_layout)
-
-        # Color field
-        color_layout = QHBoxLayout()
-        color_layout.addWidget(QLabel("Color:"))
-        color_combo = QComboBox()
-        _populate_color_combo(color_combo, current_color if current_color else "None")
-        color_layout.addWidget(color_combo)
-        layout.addLayout(color_layout)
-
-        # Remove split button
-        remove_button = QPushButton("Remove Split")
-        remove_button.clicked.connect(dialog.reject)  # Will use reject to signal removal
-        layout.addWidget(remove_button)
-
-        # OK/Cancel buttons
-        button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        button_box.accepted.connect(dialog.accept)
-        button_box.rejected.connect(lambda: dialog.done(2))  # Use code 2 for cancel
-        layout.addWidget(button_box)
-
-        dialog.setLayout(layout)
-
-        # Show dialog
-        result = dialog.exec()
-
-        if result == QDialog.DialogCode.Accepted:
-            # Update label and color
-            new_label = label_edit.text()
-            new_color = color_combo.currentText()
-            if new_label:
-                self.split_columns[byte_idx]['label'] = new_label
-                self.split_columns[byte_idx]['color'] = new_color
-                self.update_display()
-                self._notify_column_sidebar_changed()
-        elif result == QDialog.DialogCode.Rejected:
-            # Remove split
-            del self.split_columns[byte_idx]
-            self.update_display()
-            self._notify_column_sidebar_changed()
+        self.parent_window.edit_split_as_definition(payload)
 
     def _update_live_bit_viewer(self):
         """Update the live bit viewer with bits from selected columns."""
@@ -1632,46 +1795,18 @@ class ByteStructuredTableWidget(QTableWidget):
 
         for row_idx in range(num_frames):
             data_row = row_idx + self.HEADER_ROW_COUNT
+            frame_bytes = self._get_frame_bytes(row_idx)
 
-            # Collect bits from selected columns by reading cell text
+            # Collect bits directly from the underlying selected column ranges.
             collected_bits = []
             for col_idx in sorted_cols:
-                if col_idx >= self.columnCount():
+                if col_idx >= len(self._all_columns_info):
                     continue
 
-                item = self.item(data_row, col_idx)
-                if item is None:
-                    continue
-
-                cell_text = item.text().strip()
-                if not cell_text or cell_text == "":
-                    continue
-
-                # Convert cell value to bits
-                # Handle different formats: binary (0/1), hex (0-F), or other
                 byte_idx, bit_start, bit_end, _, _ = self._all_columns_info[col_idx]
-                num_bits = bit_end - bit_start + 1
-
-                if num_bits == 1:
-                    # Single bit - cell shows "0" or "1"
-                    if cell_text in ["0", "1"]:
-                        collected_bits.append(int(cell_text))
-                elif cell_text:
-                    # Multi-bit field (nibble, byte, etc.) - convert hex to bits
-                    try:
-                        custom_segment = self._custom_split_segment(byte_idx, bit_start, bit_end)
-                        if custom_segment is not None and custom_segment.get("format") == "binary":
-                            if not all(ch in "01" for ch in cell_text):
-                                continue
-                            field_val = int(cell_text, 2)
-                        else:
-                            field_val = int(cell_text, 16)
-                        # Convert to bits (MSB first)
-                        for bit_pos in range(num_bits - 1, -1, -1):
-                            collected_bits.append((field_val >> bit_pos) & 1)
-                    except (ValueError, TypeError):
-                        # If not hex, skip this column
-                        pass
+                collected_bits.extend(
+                    self._column_bits_for_live_viewer(frame_bytes, byte_idx, bit_start, bit_end)
+                )
 
             if collected_bits:
                 frames_bits.append(np.array(collected_bits, dtype=np.uint8))
@@ -1776,6 +1911,61 @@ class ByteStructuredTableWidget(QTableWidget):
             self._bit_cache_source_id = source_id
             self._bit_cache_length = data_len
         return self._bit_cache
+
+    def _frame_display_lengths(self):
+        """Return frame lengths in bytes for the current framed view."""
+        if self.frames is None:
+            return []
+        return [(length_bits + 7) // 8 for _, length_bits in self.frames]
+
+    def _clamp_display_frame_length(self, frame_lengths):
+        """Match the framed column-width selection used by update_display."""
+        max_len = max(frame_lengths) if frame_lengths else 0
+        if len(frame_lengths) > 1:
+            non_last_max = max(frame_lengths[:-1])
+            if max_len > non_last_max * 10 and max_len > 64:
+                max_len = non_last_max
+        if max_len > self.max_display_cols:
+            max_len = self.max_display_cols
+        return max_len
+
+    def _build_framed_byte_cache(self, max_len):
+        """Extract each frame once and build a matrix for displayed byte columns."""
+        if self.frames is None or len(self.frames) == 0:
+            return [], np.empty((0, 0), dtype=np.uint8), np.empty(0, dtype=np.int32)
+
+        frame_cache = []
+        visible_lengths = np.zeros(len(self.frames), dtype=np.int32)
+        if max_len > 0:
+            frame_matrix = np.zeros((len(self.frames), max_len), dtype=np.uint8)
+        else:
+            frame_matrix = np.empty((len(self.frames), 0), dtype=np.uint8)
+
+        for frame_idx in range(len(self.frames)):
+            frame_bytes = self._get_frame_bytes(frame_idx)
+            frame_cache.append(frame_bytes)
+            visible_len = min(len(frame_bytes), max_len)
+            visible_lengths[frame_idx] = visible_len
+            if visible_len > 0:
+                frame_matrix[frame_idx, :visible_len] = frame_bytes[:visible_len]
+
+        return frame_cache, frame_matrix, visible_lengths
+
+    def _build_continuous_row_cache(self):
+        """Build a padded 2D byte matrix for continuous mode rows."""
+        if self.bytes_data is None or len(self.bytes_data) == 0:
+            return np.empty((0, 0), dtype=np.uint8), np.empty(0, dtype=np.int32), 0
+
+        num_bytes = len(self.bytes_data)
+        num_rows = (num_bytes + self.row_size - 1) // self.row_size
+        padded = np.zeros(num_rows * self.row_size, dtype=np.uint8)
+        padded[:num_bytes] = self.bytes_data
+        row_matrix = padded.reshape(num_rows, self.row_size)
+        row_lengths = np.full(num_rows, self.row_size, dtype=np.int32)
+        if num_rows > 0:
+            last_row_len = num_bytes - ((num_rows - 1) * self.row_size)
+            row_lengths[-1] = last_row_len if last_row_len > 0 else self.row_size
+        return row_matrix, row_lengths, num_rows
 
     def set_overlay_options(self, mode=None):
         """Set the byte-level overlay mode."""
@@ -2171,29 +2361,28 @@ class ByteStructuredTableWidget(QTableWidget):
 
         # Build column structure to get table column indices
         if self.frames is not None and len(self.frames) > 0:
-            # LAZY FRAMES: calculate max length from frame tuples
-            max_len = 0
-            for _, length_bits in self.frames:
-                frame_bytes = (length_bits + 7) // 8  # Round up to bytes
-                max_len = max(max_len, frame_bytes)
-
+            frame_lengths = self._frame_display_lengths()
+            max_len = self._clamp_display_frame_length(frame_lengths)
             _, _, _, _, all_columns_info, _, _ = self._build_headers(max_len)
+            frame_cache, frame_matrix, visible_lengths = self._build_framed_byte_cache(max_len)
 
-            # Check each table column for constant values
             for table_col_idx, (byte_idx, bit_start, bit_end, col_def, is_undef) in enumerate(all_columns_info):
+                if col_def is None and not is_undef:
+                    valid_rows = visible_lengths > byte_idx
+                    if np.any(valid_rows):
+                        values = frame_matrix[valid_rows, byte_idx]
+                        if values.size > 0 and np.all(values == values[0]):
+                            self.constant_columns.add(table_col_idx)
+                    continue
+
                 val_text = None
                 constant = True
 
-                for frame_idx in range(len(self.frames)):
-                    # LAZY: Extract frame bytes on-demand
-                    frame = self._get_frame_bytes(frame_idx)
-
+                for frame in frame_cache:
                     if byte_idx >= len(frame):
                         continue
 
-                    # Extract value for this column from this frame
                     if col_def is not None and col_def.unit == "bit":
-                        # Bit-based column - extract bit range
                         start_byte = col_def.start_bit // 8
                         if start_byte < len(frame):
                             end_byte = min((col_def.start_bit + col_def.total_bits - 1) // 8 + 1, len(frame))
@@ -2202,16 +2391,11 @@ class ByteStructuredTableWidget(QTableWidget):
                         else:
                             continue
                     elif is_undef:
-                        # Undefined bit range
-                        if byte_idx < len(frame):
-                            abs_start_bit = byte_idx * 8 + bit_start
-                            num_bits = bit_end - bit_start + 1
-                            byte_slice = frame[byte_idx:byte_idx + 1]
-                            text = self._format_undefined_bits(byte_slice, abs_start_bit, num_bits)
-                        else:
-                            continue
+                        abs_start_bit = byte_idx * 8 + bit_start
+                        num_bits = bit_end - bit_start + 1
+                        byte_slice = frame[byte_idx:byte_idx + 1]
+                        text = self._format_undefined_bits(byte_slice, abs_start_bit, num_bits)
                     else:
-                        # Regular byte column
                         text = "{:02X}".format(int(frame[byte_idx]))
 
                     if val_text is None:
@@ -2231,38 +2415,44 @@ class ByteStructuredTableWidget(QTableWidget):
                 self.update_display()
                 return
 
-            num_rows = (num_bytes + self.row_size - 1) // self.row_size
+            row_matrix, row_lengths, num_rows = self._build_continuous_row_cache()
             _, _, _, _, all_columns_info, _, _ = self._build_headers(self.row_size)
 
             # Check each table column for constant values
             for table_col_idx, (byte_offset, bit_start, bit_end, col_def, is_undef) in enumerate(all_columns_info):
+                if col_def is None and not is_undef:
+                    valid_rows = row_lengths > byte_offset
+                    if np.any(valid_rows):
+                        values = row_matrix[valid_rows, byte_offset]
+                        if values.size > 0 and np.all(values == values[0]):
+                            self.constant_columns.add(table_col_idx)
+                    continue
+
                 val_text = None
                 constant = True
 
                 for row in range(num_rows):
                     absolute_byte_idx = row * self.row_size + byte_offset
+                    row_bytes = row_matrix[row, :row_lengths[row]]
 
                     if absolute_byte_idx >= num_bytes:
                         continue
 
                     # Extract value for this column from this row
                     if col_def is not None and col_def.unit == "bit":
-                        # Bit-based column
-                        start_byte = col_def.start_bit // 8 + row * self.row_size
-                        if start_byte < num_bytes:
-                            end_byte = min((col_def.start_bit + col_def.total_bits - 1) // 8 + 1 + row * self.row_size, num_bytes)
-                            byte_slice = data[start_byte:end_byte]
+                        start_byte = col_def.start_bit // 8
+                        if start_byte < len(row_bytes):
+                            end_byte = min((col_def.start_bit + col_def.total_bits - 1) // 8 + 1, len(row_bytes))
+                            byte_slice = row_bytes[start_byte:end_byte]
                             text = self._format_bit_range(byte_slice, col_def)
                         else:
                             continue
                     elif is_undef:
-                        # Undefined bit range
                         abs_start_bit = absolute_byte_idx * 8 + bit_start
                         num_bits = bit_end - bit_start + 1
-                        byte_slice = data[absolute_byte_idx:absolute_byte_idx + 1]
+                        byte_slice = row_bytes[byte_offset:byte_offset + 1]
                         text = self._format_undefined_bits(byte_slice, abs_start_bit, num_bits)
                     else:
-                        # Regular byte column
                         text = "{:02X}".format(int(data[absolute_byte_idx]))
 
                     if val_text is None:
@@ -2396,13 +2586,22 @@ class ByteStructuredTableWidget(QTableWidget):
             if split_color is not None:
                 item.setBackground(split_color)
 
-    def _render_header_rows(self, num_table_cols, label_spans, byte_label_spans, subbit_labels):
+    def _render_header_rows(self, num_table_cols, label_spans, byte_labels, subbit_labels):
         """Render the three static header rows shared by both display modes."""
         center = Qt.AlignmentFlag.AlignCenter
 
         for col_idx in range(num_table_cols):
             self.setItem(0, col_idx, self._new_read_only_item(background=QColor(220, 220, 220)))
-            self.setItem(1, col_idx, self._new_read_only_item(background=QColor(240, 240, 240)))
+            self.setItem(
+                1,
+                col_idx,
+                self._new_read_only_item(
+                    byte_labels[col_idx],
+                    background=QColor(240, 240, 240),
+                    font=QFont("Consolas", max(8, self.display_font_size - 1)),
+                    alignment=center,
+                ),
+            )
             self.setItem(
                 2,
                 col_idx,
@@ -2437,7 +2636,91 @@ class ByteStructuredTableWidget(QTableWidget):
             if span_width > 1:
                 self.setSpan(0, table_col, 1, span_width)
 
+    def _parse_subbit_label_bounds(self, label_text):
+        """Parse a sub-bit label like '4' or '4-7' into numeric bounds."""
+        label = str(label_text).strip()
+        if not label:
+            return None
+        if "-" in label:
+            start_text, end_text = label.split("-", 1)
+            return int(start_text), int(end_text)
+        value = int(label)
+        return value, value
+
+    def _apply_compact_header_spans(self, field_spans, all_columns_info, byte_label_spans, subbit_labels):
+        """Compact byte/bit header rows for split bytes and combined definitions."""
+        center = Qt.AlignmentFlag.AlignCenter
+        blocked_byte_spans = []
+
+        for start_col, span_len, col_def in field_spans:
+            if col_def is None or span_len <= 1:
+                continue
+
+            span_columns = all_columns_info[start_col:start_col + span_len]
+            if len(span_columns) != span_len:
+                continue
+
+            byte_indices = {byte_idx for byte_idx, _, _, _, _ in span_columns}
+            blocked_byte_spans.append((start_col, start_col + span_len - 1))
+            self.setItem(
+                1,
+                start_col,
+                self._new_read_only_item(
+                    self._format_range_label(min(byte_indices), max(byte_indices)),
+                    background=QColor(240, 240, 240),
+                    font=QFont("Consolas", max(8, self.display_font_size - 1)),
+                    alignment=center,
+                ),
+            )
+            self.setSpan(1, start_col, 1, span_len)
+
+            if len(byte_indices) != 1:
+                self.setItem(
+                    2,
+                    start_col,
+                    self._new_read_only_item(
+                        self._format_range_label(0, col_def.total_bits - 1),
+                        background=QColor(250, 250, 250),
+                        font=QFont("Consolas", max(8, self.display_font_size - 1)),
+                        alignment=center,
+                    ),
+                )
+                self.setSpan(2, start_col, 1, span_len)
+                continue
+
+            if col_def.display_format == "binary":
+                continue
+
+            start_bounds = self._parse_subbit_label_bounds(subbit_labels[start_col])
+            end_bounds = self._parse_subbit_label_bounds(subbit_labels[start_col + span_len - 1])
+            if start_bounds is None or end_bounds is None:
+                continue
+
+            merged_label = self._format_subbit_label(start_bounds[0], end_bounds[1])
+            self.setItem(
+                2,
+                start_col,
+                self._new_read_only_item(
+                    merged_label,
+                    background=QColor(250, 250, 250),
+                    font=QFont("Consolas", max(8, self.display_font_size - 1)),
+                    alignment=center,
+                ),
+            )
+            self.setSpan(2, start_col, 1, span_len)
+
         for table_col, span_width, byte_label in byte_label_spans:
+            if span_width <= 1:
+                continue
+
+            span_end = table_col + span_width - 1
+            overlaps_compact_span = any(
+                not (span_end < blocked_start or blocked_end < table_col)
+                for blocked_start, blocked_end in blocked_byte_spans
+            )
+            if overlaps_compact_span:
+                continue
+
             self.setItem(
                 1,
                 table_col,
@@ -2448,8 +2731,7 @@ class ByteStructuredTableWidget(QTableWidget):
                     alignment=center,
                 ),
             )
-            if span_width > 1:
-                self.setSpan(1, table_col, 1, span_width)
+            self.setSpan(1, table_col, 1, span_width)
 
     def _build_headers(self, num_cols: int):
         """
@@ -2662,6 +2944,7 @@ class ByteStructuredTableWidget(QTableWidget):
                             split_all_columns_info.append((byte_idx, bit, bit, None, False))
                             split_table_col += 1
                         split_labels[start_col] = (8, split_label, split_color)
+                        continue
                     elif split_type == 'nibble':
                         # Split into 2 nibble columns (high nibble first, then low nibble - MSB first).
                         # If a nibble itself was further split into bits, expand it to 4 bit columns here.
@@ -2699,6 +2982,7 @@ class ByteStructuredTableWidget(QTableWidget):
                             # No nibble-level split - behave like the original 2-column nibble split
                             total_span = split_table_col - start_col
                             split_labels[start_col] = (total_span, split_label, split_color)
+                        continue
             # No byte-level split - check for nibble-level splits or copy original columns
             if byte_idx in col_map:
                 split_col_map[byte_idx] = []
@@ -2746,6 +3030,8 @@ class ByteStructuredTableWidget(QTableWidget):
         current_byte_idx = None
         current_byte_start = None
         current_byte_len = 0
+        current_split_byte_idx = None
+        current_split_bit_offset = 0
 
         for idx, (byte_idx, bit_start, bit_end, col_def, is_undef) in enumerate(all_columns_info):
             # Decide what label (if any) this column should have
@@ -2802,7 +3088,18 @@ class ByteStructuredTableWidget(QTableWidget):
             byte_labels.append(f"{byte_idx}")
 
             # Sub-bit label: show bit range within that byte
-            subbit_labels.append(f"{bit_start}-{bit_end}")
+            if byte_idx != current_split_byte_idx:
+                current_split_byte_idx = byte_idx
+                current_split_bit_offset = 0
+
+            if self._byte_has_split(byte_idx):
+                span_width = abs(bit_end - bit_start) + 1
+                label_start = current_split_bit_offset
+                label_end = label_start + span_width - 1
+                subbit_labels.append(self._format_subbit_label(label_start, label_end))
+                current_split_bit_offset += span_width
+            else:
+                subbit_labels.append(self._format_subbit_label(bit_start, bit_end))
 
         # Flush trailing label span
         if current_label is not None:
@@ -3333,8 +3630,12 @@ class ByteStructuredTableWidget(QTableWidget):
             if max_len > self.max_display_cols:
                 max_len = self.max_display_cols
 
+            # Keep framed helpers aligned on the exact width the table will render.
+            frame_lengths = self._frame_display_lengths()
+            max_len = self._clamp_display_frame_length(frame_lengths)
+
             # Build the column structure
-            _, label_spans, _, subbit_labels, all_columns_info, byte_label_spans, split_labels = self._build_headers(max_len)
+            _, label_spans, byte_labels, subbit_labels, all_columns_info, byte_label_spans, split_labels = self._build_headers(max_len)
             self._all_columns_info = all_columns_info
 
             first_col_for_def = self._get_first_column_for_definition(all_columns_info)
@@ -3343,8 +3644,10 @@ class ByteStructuredTableWidget(QTableWidget):
             # Set up table with split columns
             num_table_cols = len(all_columns_info)
             self.setColumnCount(num_table_cols)
+            self._set_compact_horizontal_headers(num_table_cols, label_spans)
             self.setRowCount(num_data_rows + self.HEADER_ROW_COUNT)
-            self._render_header_rows(num_table_cols, label_spans, byte_label_spans, subbit_labels)
+            self._render_header_rows(num_table_cols, label_spans, byte_labels, subbit_labels)
+            self._apply_compact_header_spans(field_spans, all_columns_info, byte_label_spans, subbit_labels)
 
             # === Data rows ===
             row_labels = ["Labels", "Bytes", "Bits"]
@@ -3398,7 +3701,7 @@ class ByteStructuredTableWidget(QTableWidget):
             return
 
         # Build the column structure for one row
-        _, label_spans, _, subbit_labels, all_columns_info, byte_label_spans, split_labels = self._build_headers(self.row_size)
+        _, label_spans, byte_labels, subbit_labels, all_columns_info, byte_label_spans, split_labels = self._build_headers(self.row_size)
         self._all_columns_info = all_columns_info
 
         first_col_for_def = self._get_first_column_for_definition(all_columns_info)
@@ -3407,12 +3710,14 @@ class ByteStructuredTableWidget(QTableWidget):
         # Set up table with split columns
         num_table_cols = len(all_columns_info)
         self.setColumnCount(num_table_cols)
+        self._set_compact_horizontal_headers(num_table_cols, label_spans)
 
         total_data_rows = (num_bytes + self.row_size - 1) // self.row_size
         num_data_rows = total_data_rows
 
         self.setRowCount(num_data_rows + self.HEADER_ROW_COUNT)
-        self._render_header_rows(num_table_cols, label_spans, byte_label_spans, subbit_labels)
+        self._render_header_rows(num_table_cols, label_spans, byte_labels, subbit_labels)
+        self._apply_compact_header_spans(field_spans, all_columns_info, byte_label_spans, subbit_labels)
 
         # === Data rows — lazy/virtual (only visible rows populated on load) ===
         row_labels = ["Labels", "Bytes", "Bits"]

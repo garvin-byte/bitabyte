@@ -21,10 +21,13 @@ from PyQt6.QtWidgets import (
 
 from .canvas import BitCanvas
 from .table import ByteStructuredTableWidget
+from .window_columns import ColumnDefinitionsTreeWidget
 from .widgets import TextDisplayWidget
 
 
 class BitViewerWindowLayoutMixin:
+    LEFT_PANEL_WIDTH = 380
+
     def create_left_panel(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -218,9 +221,10 @@ class BitViewerWindowLayoutMixin:
         columns_group = QGroupBox("Column Definitions")
         columns_layout = QVBoxLayout()
 
-        self.columns_list = QListWidget()
+        self.columns_list = ColumnDefinitionsTreeWidget()
         self.columns_list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.columns_list.itemDoubleClicked.connect(self.edit_column_definition)
+        self.columns_list.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.columns_list.itemDoubleClicked.connect(lambda item, _column: self.edit_column_definition(item))
         columns_layout.addWidget(self.columns_list)
 
         btn_add_column = QPushButton("Add Column")
@@ -308,8 +312,9 @@ class BitViewerWindowLayoutMixin:
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setMinimumWidth(340)
-        scroll.setMaximumWidth(340)
+        scroll.setMinimumWidth(self.LEFT_PANEL_WIDTH)
+        scroll.setMaximumWidth(self.LEFT_PANEL_WIDTH)
+        self.left_panel_scroll = scroll
         return scroll
 
     def update_left_panel_visibility(self):

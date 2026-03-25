@@ -124,9 +124,11 @@ class BitViewerWindow(
         main_layout.setStretch(0, 0)
         main_layout.setStretch(1, 1)
 
-        splitter.addWidget(self.create_left_panel())
+        left_panel = self.create_left_panel()
+        splitter.addWidget(left_panel)
         splitter.addWidget(self.create_right_panel())
-        splitter.setSizes([400, 1000])
+        left_panel_width = getattr(self, "LEFT_PANEL_WIDTH", 380)
+        splitter.setSizes([left_panel_width, max(1, 1400 - left_panel_width)])
 
         self.live_bit_viewer_dock = QDockWidget("Live Bit Viewer", self)
         self.live_bit_viewer_dock.setAllowedAreas(
@@ -252,7 +254,7 @@ class BitViewerWindow(
                 background-color: {indicator};
                 border: 2px solid {indicator_border};
             }}
-            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QTextEdit, QTableWidget {{
+            QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QListWidget, QTreeWidget, QTextEdit, QTableWidget {{
                 background-color: {input_background};
                 border: 1px solid #b7c6d8;
                 border-radius: 4px;
@@ -261,7 +263,7 @@ class BitViewerWindow(
                 selection-background-color: {button};
                 selection-color: white;
             }}
-            QListWidget, QTextEdit, QTableWidget {{
+            QListWidget, QTreeWidget, QTextEdit, QTableWidget {{
                 background-color: {table_background};
             }}
             QSpinBox, QDoubleSpinBox {{

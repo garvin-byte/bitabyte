@@ -8,6 +8,7 @@ from common.bit_view_utils import build_highlight_intervals, is_bit_highlighted
 
 class BitCanvas(QWidget):
     """Fast bit rendering widget using QPainter with tile-based QPixmap caching"""
+    MAX_WIDGET_HEIGHT = 4_000_000
 
     def __init__(self):
         super().__init__()
@@ -31,6 +32,8 @@ class BitCanvas(QWidget):
         self.tile_cache = {}  # {tile_key: QPixmap}
         self.tile_rows = 100  # rows per tile (vertical only; horizontal is clipped per paint)
         self.cache_version = 0  # Increment to invalidate all cache
+        self.virtual_content_height = 0
+        self.actual_content_height = 0
 
         # Set background
         self.setAutoFillBackground(True)
@@ -72,8 +75,31 @@ class BitCanvas(QWidget):
         cols = max(1, self.bits_per_row)
         rows = (len(self.bits) + cols - 1) // cols
         height = rows * self.bit_size
+        self.virtual_content_height = height
+        self.actual_content_height = min(height, self.MAX_WIDGET_HEIGHT)
         width = cols * self.bit_size + 60  # Extra space for row labels
-        self.resize(width, height)
+        self.resize(width, self.actual_content_height)
+        self.setMinimumSize(width, self.actual_content_height)
+
+    def _scroll_area(self):
+        viewport = self.parent()
+        if viewport is None:
+            return None
+        scroll_area = viewport.parent()
+        if scroll_area is not None and hasattr(scroll_area, "verticalScrollBar"):
+            return scroll_area
+        return None
+
+    def _virtual_scroll_y(self, actual_scroll_y: int, viewport_height: int) -> int:
+        """Map the real scrollbar offset onto the full virtual content height."""
+        if self.virtual_content_height <= self.actual_content_height:
+            return actual_scroll_y
+
+        max_actual_offset = max(0, self.actual_content_height - viewport_height)
+        max_virtual_offset = max(0, self.virtual_content_height - viewport_height)
+        if max_actual_offset == 0 or max_virtual_offset == 0:
+            return 0
+        return int(round((actual_scroll_y / max_actual_offset) * max_virtual_offset))
 
     def set_highlights(self, positions, pattern_len):
         self.highlighted_positions = set(positions)
@@ -146,6 +172,11 @@ class BitCanvas(QWidget):
         if visible_rect.isEmpty():
             visible_rect = event.rect()
 
+        scroll_area = self._scroll_area()
+        viewport_height = scroll_area.viewport().height() if scroll_area is not None else visible_rect.height()
+        virtual_visible_top = self._virtual_scroll_y(visible_rect.top(), viewport_height)
+        virtual_visible_bottom = virtual_visible_top + visible_rect.height()
+
         # Visible column range — only render what's horizontally on screen
         col_start = max(0, (visible_rect.left() - label_w) // bs)
         col_end   = min(cols, (visible_rect.right() - label_w) // bs + 1)
@@ -154,12 +185,13 @@ class BitCanvas(QWidget):
             col_start = 0
         col_end = max(col_start + 1, col_end)
         # Visible tile row range
-        start_tile = max(0, visible_rect.top() // (self.tile_rows * bs))
+        start_tile = max(0, virtual_visible_top // (self.tile_rows * bs))
         end_tile   = min((rows + self.tile_rows - 1) // self.tile_rows,
-                         visible_rect.bottom() // (self.tile_rows * bs) + 1)
+                         virtual_visible_bottom // (self.tile_rows * bs) + 1)
 
         for tile_idx in range(start_tile, end_tile):
-            tile_y   = tile_idx * self.tile_rows * bs
+            tile_virtual_y = tile_idx * self.tile_rows * bs
+            tile_y   = int(round(visible_rect.top() + (tile_virtual_y - virtual_visible_top)))
             tile_key = (tile_idx, col_start, col_end, self.cache_version)
             if tile_key not in self.tile_cache:
                 self.tile_cache[tile_key] = self._render_tile(
