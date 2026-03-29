@@ -18,6 +18,11 @@ enum class BitstreamSyncDiscoverySearchEffort {
     Exhaustive = 2,
 };
 
+enum class BitstreamSyncDiscoveryLengthMode {
+    VariableAndStatic = 0,
+    StaticOnly = 1,
+};
+
 struct BitstreamSyncDiscoverySettings {
     int minimumPatternBits = 3;
     int maximumPatternBits = 32;
@@ -28,6 +33,7 @@ struct BitstreamSyncDiscoverySettings {
     double entropyThreshold = 0.3;
     double maximumGapCoefficientVariation = 2.0;
     BitstreamSyncDiscoverySearchEffort searchEffort = BitstreamSyncDiscoverySearchEffort::Balanced;
+    BitstreamSyncDiscoveryLengthMode lengthMode = BitstreamSyncDiscoveryLengthMode::VariableAndStatic;
 };
 
 struct BitstreamSyncDiscoveryProgressUpdate {

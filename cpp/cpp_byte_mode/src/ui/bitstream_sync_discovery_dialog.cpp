@@ -87,7 +87,7 @@ BitstreamSyncDiscoveryDialog::BitstreamSyncDiscoveryDialog(data::ByteDataSource*
     qRegisterMetaType<features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidateList>();
 
     setModal(true);
-    setWindowTitle(QStringLiteral("Bitstream Sync Discovery"));
+    setWindowTitle(QStringLiteral("Find Frames"));
     resize(1280, 760);
     buildLayout();
     setScanningState(false);
@@ -113,7 +113,7 @@ void BitstreamSyncDiscoveryDialog::startDiscovery() {
         progressPhaseLabel_->setVisible(true);
         progressDetailLabel_->setVisible(true);
         progressPhaseLabel_->setText(QStringLiteral("No file loaded"));
-        progressDetailLabel_->setText(QStringLiteral("Load a file before running bitstream sync discovery."));
+        progressDetailLabel_->setText(QStringLiteral("Load a file before running Find Frames."));
         progressBar_->setValue(0);
         return;
     }
@@ -162,8 +162,8 @@ void BitstreamSyncDiscoveryDialog::startDiscovery() {
     setScanningState(true);
     progressPhaseLabel_->setVisible(true);
     progressDetailLabel_->setVisible(true);
-    progressPhaseLabel_->setText(QStringLiteral("Bitstream Sync Discovery"));
-    progressDetailLabel_->setText(QStringLiteral("Scanning bitstream candidates..."));
+    progressPhaseLabel_->setText(QStringLiteral("Find Frames"));
+    progressDetailLabel_->setText(QStringLiteral("Scanning framing candidates..."));
     progressBar_->setValue(0);
     workerThread_->start();
 }
@@ -236,7 +236,7 @@ void BitstreamSyncDiscoveryDialog::handleDiscoveryCanceled() {
     progressPhaseLabel_->setVisible(true);
     progressDetailLabel_->setVisible(true);
     progressPhaseLabel_->setText(QStringLiteral("Discovery canceled"));
-    progressDetailLabel_->setText(QStringLiteral("Bitstream sync discovery was canceled."));
+    progressDetailLabel_->setText(QStringLiteral("Find Frames was canceled."));
     progressBar_->setValue(0);
     stopWorkerThread();
 }
@@ -344,12 +344,12 @@ void BitstreamSyncDiscoveryDialog::buildLayout() {
     advancedControlsLayout->addStretch();
     rootLayout->addLayout(advancedControlsLayout);
 
-    progressPhaseLabel_ = new QLabel(QStringLiteral("Bitstream Sync Discovery"), this);
+    progressPhaseLabel_ = new QLabel(QStringLiteral("Find Frames"), this);
     progressPhaseLabel_->setVisible(false);
     rootLayout->addWidget(progressPhaseLabel_);
 
     progressDetailLabel_ = new QLabel(
-        QStringLiteral("Choose the search range and v2 framing filters, then click Discover."),
+        QStringLiteral("Choose the search range and framing filters, then click Discover."),
         this
     );
     progressDetailLabel_->setWordWrap(true);

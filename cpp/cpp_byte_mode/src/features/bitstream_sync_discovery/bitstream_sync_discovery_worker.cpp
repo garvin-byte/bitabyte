@@ -5,6 +5,38 @@
 #include "features/bitstream_sync_discovery/bitstream_sync_discovery_formatter.h"
 
 namespace bitabyte::features::bitstream_sync_discovery {
+namespace {
+
+[[nodiscard]] bool candidateMatchesLengthMode(
+    const BitstreamSyncDiscoveryCandidate& candidate,
+    BitstreamSyncDiscoveryLengthMode lengthMode
+) {
+    switch (lengthMode) {
+    case BitstreamSyncDiscoveryLengthMode::VariableAndStatic:
+        return true;
+    case BitstreamSyncDiscoveryLengthMode::StaticOnly:
+        return candidate.protocolClassification == QStringLiteral("fixed-length")
+            || candidate.protocolClassification == QStringLiteral("multi-type fixed");
+    }
+
+    return true;
+}
+
+[[nodiscard]] BitstreamSyncDiscoveryCandidateList filteredCandidatesForLengthMode(
+    const BitstreamSyncDiscoveryCandidateList& candidates,
+    BitstreamSyncDiscoveryLengthMode lengthMode
+) {
+    BitstreamSyncDiscoveryCandidateList filteredCandidates;
+    filteredCandidates.reserve(candidates.size());
+    for (const BitstreamSyncDiscoveryCandidate& candidate : candidates) {
+        if (candidateMatchesLengthMode(candidate, lengthMode)) {
+            filteredCandidates.append(candidate);
+        }
+    }
+    return filteredCandidates;
+}
+
+}  // namespace
 
 BitstreamSyncDiscoveryWorker::BitstreamSyncDiscoveryWorker(
     const data::ByteDataSource* dataSource,
@@ -22,7 +54,7 @@ void BitstreamSyncDiscoveryWorker::cancel() {
 
 void BitstreamSyncDiscoveryWorker::start() {
     if (dataSource_ == nullptr || !dataSource_->hasData()) {
-        emit failed(QStringLiteral("Load a file before running bitstream sync discovery."));
+        emit failed(QStringLiteral("Load a file before running Find Frames."));
         return;
     }
 
@@ -34,7 +66,9 @@ void BitstreamSyncDiscoveryWorker::start() {
         [this](const BitstreamSyncDiscoveryProgressUpdate& progressUpdate,
                const BitstreamSyncDiscoveryCandidateList& partialCandidates) {
             emit progressChanged(progressUpdate);
-            emit partialResultsReady(formatCandidatesForDisplay(partialCandidates));
+            emit partialResultsReady(formatCandidatesForDisplay(
+                filteredCandidatesForLengthMode(partialCandidates, settings_.lengthMode)
+            ));
         },
         &errorMessage
     );
@@ -44,14 +78,19 @@ void BitstreamSyncDiscoveryWorker::start() {
         return;
     }
 
-    if (candidates.isEmpty()) {
+    const BitstreamSyncDiscoveryCandidateList filteredCandidates =
+        filteredCandidatesForLengthMode(candidates, settings_.lengthMode);
+
+    if (filteredCandidates.isEmpty()) {
         emit failed(errorMessage.isEmpty()
-                        ? QStringLiteral("No bitstream sync candidates were found.")
+                        ? (settings_.lengthMode == BitstreamSyncDiscoveryLengthMode::StaticOnly
+                              ? QStringLiteral("No static frame candidates were found.")
+                              : QStringLiteral("No frame candidates were found."))
                         : errorMessage);
         return;
     }
 
-    emit finished(formatCandidatesForDisplay(candidates));
+    emit finished(formatCandidatesForDisplay(filteredCandidates));
 }
 
 }  // namespace bitabyte::features::bitstream_sync_discovery

@@ -1289,6 +1289,21 @@ void mergeFrameLengthGroupsByEntropy(
     return QStringLiteral("irregular");
 }
 
+[[nodiscard]] bool classificationMatchesLengthMode(
+    const QString& protocolClassification,
+    BitstreamSyncDiscoveryLengthMode lengthMode
+) {
+    switch (lengthMode) {
+    case BitstreamSyncDiscoveryLengthMode::VariableAndStatic:
+        return true;
+    case BitstreamSyncDiscoveryLengthMode::StaticOnly:
+        return protocolClassification == QStringLiteral("fixed-length")
+            || protocolClassification == QStringLiteral("multi-type fixed");
+    }
+
+    return true;
+}
+
 [[nodiscard]] double protocolClassificationScore(const QString& protocolClassification) {
     if (protocolClassification == QStringLiteral("fixed-length")) {
         return 1.0;
@@ -1470,6 +1485,17 @@ void mergeFrameLengthGroupsByEntropy(
         return std::nullopt;
     }
     preanalyzedCandidate.frameLengthSummary = summarizeFrameLengths(preanalyzedCandidate.frameSpans);
+    if (settings.lengthMode == BitstreamSyncDiscoveryLengthMode::StaticOnly) {
+        const QVector<FrameLengthGroup> initialFrameLengthGroups =
+            buildInitialFrameLengthGroups(preanalyzedCandidate.frameSpans);
+        const QString initialProtocolClassification = classifyFrameDistribution(
+            preanalyzedCandidate.frameLengthSummary,
+            initialFrameLengthGroups
+        );
+        if (initialProtocolClassification == QStringLiteral("variable-length")) {
+            return std::nullopt;
+        }
+    }
     preanalyzedCandidate.familyKey = preanalyzedFamilyKey(
         adjustedPattern.matchStartBits,
         preanalyzedCandidate.adjustedGapStatistics.medianGapBits
@@ -1508,9 +1534,22 @@ void mergeFrameLengthGroupsByEntropy(
     candidate.frameLengthSummary = preanalyzedCandidate.frameLengthSummary;
 
     QVector<FrameLengthGroup> frameLengthGroups = buildInitialFrameLengthGroups(candidate.frameSpans);
-    mergeFrameLengthGroupsByEntropy(dataSource, candidate.frameSpans, &frameLengthGroups);
-    const double entropySampleReliability = sampleReliabilityScore(candidate.frameSpans.size());
+    const QString initialProtocolClassification = classifyFrameDistribution(
+        candidate.frameLengthSummary,
+        frameLengthGroups
+    );
+    if (settings.lengthMode == BitstreamSyncDiscoveryLengthMode::StaticOnly
+        && initialProtocolClassification == QStringLiteral("variable-length")) {
+        return std::nullopt;
+    }
 
+    mergeFrameLengthGroupsByEntropy(dataSource, candidate.frameSpans, &frameLengthGroups);
+    candidate.protocolClassification = classifyFrameDistribution(candidate.frameLengthSummary, frameLengthGroups);
+    if (!classificationMatchesLengthMode(candidate.protocolClassification, settings.lengthMode)) {
+        return std::nullopt;
+    }
+
+    const double entropySampleReliability = sampleReliabilityScore(candidate.frameSpans.size());
     int maximumStrongCliffCount = 0;
     int totalStrongCliffCount = 0;
     int totalRawCliffCount = 0;
@@ -1544,7 +1583,6 @@ void mergeFrameLengthGroupsByEntropy(
     candidate.detectedGroupCount = frameLengthGroups.size();
     candidate.detectedEntropyCliffCount = maximumStrongCliffCount;
     candidate.sharedHeaderCliffCount = sharedHeaderCliffCount(frameLengthGroups, settings.entropyThreshold);
-    candidate.protocolClassification = classifyFrameDistribution(candidate.frameLengthSummary, frameLengthGroups);
     const double classificationScore = protocolClassificationScore(candidate.protocolClassification);
 
     double withinGroupTightness = 0.0;
@@ -1704,7 +1742,7 @@ BitstreamSyncDiscoveryCandidateList BitstreamSyncDiscoveryEngine::discover(
 
     if (!dataSource.hasData()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Load a file before running bitstream sync discovery.");
+            *errorMessage = QStringLiteral("Load a file before running Find Frames.");
         }
         return {};
     }

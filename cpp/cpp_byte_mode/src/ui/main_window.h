@@ -1,18 +1,14 @@
 #pragma once
 
 #include <QMainWindow>
-#include <QHash>
 #include <QSet>
 #include <QVector>
 
+#include <memory>
+
 #include "data/byte_data_source.h"
 #include "features/columns/byte_column_definition.h"
-#include "features/frame_browser/frame_grouping.h"
 #include "features/framing/frame_layout.h"
-#include "models/byte_table_model.h"
-
-template <typename T>
-class QFutureWatcher;
 
 class QAction;
 class QDockWidget;
@@ -25,16 +21,10 @@ class QSpinBox;
 class QButtonGroup;
 class QDragEnterEvent;
 class QDropEvent;
-class QTimer;
 
 namespace bitabyte::models {
 class ByteTableModel;
 class FrameGroupTreeModel;
-}
-
-namespace bitabyte::features::inspector {
-struct FieldSelection;
-struct FieldInspectorAnalysis;
 }
 
 namespace bitabyte::ui {
@@ -42,7 +32,10 @@ namespace bitabyte::ui {
 class ByteTableView;
 class ColumnDefinitionsPanel;
 class FieldInspectorPanel;
+class FrameBrowserController;
 class FrameGroupingPanel;
+class FramingController;
+class InspectionController;
 class LiveBitViewerWidget;
 
 class MainWindow final : public QMainWindow {
@@ -50,16 +43,13 @@ class MainWindow final : public QMainWindow {
 
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+    ~MainWindow() override;
 
 private slots:
     void openFile();
     void reloadFile();
     void exportCsv();
     void bytesPerRowChanged(int bytesPerRow);
-    void applySyncFraming();
-    void openBitstreamSyncDiscovery();
-    void frameSelection();
-    void clearFraming();
     void addColumnDefinition();
     void defineColumnFromSelection();
     void editColumnDefinition(int definitionIndex);
@@ -81,58 +71,11 @@ private:
     void buildLiveBitViewerDock();
     void applyInitialWindowLayout();
     void updateLoadedFileState();
-    void updateSelectionStatus();
     void updateWindowTitle();
     void resizeTableColumns();
-    void refreshFrameGroupingPanel();
-    void applyFrameBrowserState();
-    void clearFrameBrowserState();
-    void clearFrameScope();
     void resetStateForFreshFile();
-    void syncFramingControlsFromState();
     void refreshColumnDefinitionsPanel();
-    void scheduleLiveBitViewerRefresh();
-    void scheduleFieldInspectorRefresh();
-    void refreshLiveBitViewer();
-    void refreshFieldInspector();
-    void startFieldInspectorAnalysis(
-        const features::inspector::FieldSelection& fieldSelection,
-        int currentRow,
-        quint64 requestId
-    );
     void validateFramingStateAfterLoad();
-    void cycleFrameChronologicalOrder();
-    void cycleFrameLengthOrder();
-    void applyFrameRowOrder(features::framing::FrameLayout::RowOrderMode rowOrderMode, bool descending);
-    void updateFrameRowOrderButtons();
-    void showTableHeaderContextMenu(const QPoint& pos);
-    bool applySyncFramingPattern(const QString& patternText, QString* errorMessage = nullptr);
-    bool buildGroupingKeyForVisibleSeed(
-        int visibleColumnIndex,
-        features::frame_browser::FrameGroupingKey* groupingKey
-    ) const;
-    bool buildGroupingKeyForVisibleColumns(
-        const QSet<int>& visibleColumns,
-        features::frame_browser::FrameGroupingKey* groupingKey
-    ) const;
-    [[nodiscard]] QVector<features::frame_browser::FrameGroupingKey> buildGroupingKeysForSelection(
-        const QSet<int>& selectedVisibleColumns
-    ) const;
-    void addGroupingKeyFromVisibleSeed(int visibleColumnIndex, bool appendToGroupingStack);
-    void applyGroupingKeysFromSelection(const QSet<int>& selectedVisibleColumns, bool appendToGroupingStack);
-    void scopeToFirstChildBranch(const QVector<features::frame_browser::FrameGroupValue>& parentPath);
-    void removeGroupingKey(int keyIndex);
-    void reorderGroupingKeys(const QVector<int>& reorderedIndexes);
-    void focusFrameByStartBit(qsizetype frameStartBit);
-    void applyScopeForTreeIndex(const QModelIndex& treeIndex);
-    bool addFilterClauseForIndex(const QModelIndex& modelIndex);
-    [[nodiscard]] QString frameBrowserSummaryText() const;
-    [[nodiscard]] QVector<features::frame_browser::FrameGroupingKey> effectiveGroupingKeysForActiveScope() const;
-    void saveCurrentSplitState();
-    void applySplitStateForActiveScope();
-    void resetSplitScopeState();
-    void upsertSyncDefinitionForSelection(const QSet<int>& selectedVisibleColumns);
-    void upsertSyncDefinition(int startBit, int totalBits, const QString& displayFormat);
     void editVisibleColumns(const QSet<int>& visibleColumns);
     void selectVisibleColumns(const QSet<int>& visibleColumns);
     bool buildDefinitionFromSelection(
@@ -147,7 +90,6 @@ private:
     [[nodiscard]] QSet<int> selectedVisibleColumns() const;
     [[nodiscard]] QSet<int> visibleColumnsForAbsoluteBitRange(int startBit, int endBit) const;
     [[nodiscard]] QSet<int> editableVisibleColumnsForSeed(int visibleColumnIndex) const;
-    [[nodiscard]] QString currentLiveBitViewerMode() const;
     [[nodiscard]] QModelIndex topSelectedDataIndex() const;
     [[nodiscard]] bool extractSelectionPattern(QString* patternText, QString* errorMessage) const;
     [[nodiscard]] bool hasColumnSelection() const;
@@ -159,18 +101,12 @@ private:
     data::ByteDataSource dataSource_;
     features::framing::FrameLayout frameLayout_;
     QVector<features::columns::ByteColumnDefinition> columnDefinitions_;
-    QVector<features::framing::FrameSpan> allFrameSpans_;
-    QVector<features::frame_browser::FrameGroupingKey> frameGroupingKeys_;
-    QHash<QString, QVector<features::frame_browser::FrameGroupingKey>> scopedGroupingKeysByScopeKey_;
-    QVector<features::frame_browser::FrameFilterClause> frameFilterClauses_;
-    QVector<features::frame_browser::FrameGroupValue> activeScopePath_;
-    QString activeScopeKey_;
-    QSet<qsizetype> activeScopedFrameStartBits_;
-    QHash<int, models::SplitColumnState> rootSplitColumns_;
-    QHash<QString, QHash<int, models::SplitColumnState>> scopedSplitColumnsByScopeKey_;
     models::ByteTableModel* byteTableModel_ = nullptr;
     ByteTableView* byteTableView_ = nullptr;
     models::FrameGroupTreeModel* frameGroupTreeModel_ = nullptr;
+    std::unique_ptr<FrameBrowserController> frameBrowserController_;
+    std::unique_ptr<FramingController> framingController_;
+    std::unique_ptr<InspectionController> inspectionController_;
     QDockWidget* columnDefinitionsDock_ = nullptr;
     ColumnDefinitionsPanel* columnDefinitionsPanel_ = nullptr;
     FrameGroupingPanel* frameGroupingPanel_ = nullptr;
@@ -200,13 +136,6 @@ private:
     QAction* clearSelectionSplitsAction_ = nullptr;
     QAction* combineSelectionAction_ = nullptr;
     QAction* highlightConstantColumnsAction_ = nullptr;
-    QTimer* liveBitViewerRefreshTimer_ = nullptr;
-    QTimer* fieldInspectorRefreshTimer_ = nullptr;
-    QFutureWatcher<features::inspector::FieldInspectorAnalysis>* fieldInspectorWatcher_ = nullptr;
-    bool frameChronologicalDescending_ = false;
-    bool frameLengthDescending_ = false;
-    quint64 fieldInspectorRequestId_ = 0;
-    quint64 activeFieldInspectorRequestId_ = 0;
 };
 
 }  // namespace bitabyte::ui

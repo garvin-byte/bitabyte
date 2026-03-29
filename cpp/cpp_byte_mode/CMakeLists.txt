@@ -53,14 +53,23 @@ set(BITABYTE_CPP_BYTE_MODE_FILES
     src/ui/column_definitions_panel.cpp
     src/ui/field_inspector_panel.h
     src/ui/field_inspector_panel.cpp
+    src/ui/frame_browser_controller.h
+    src/ui/frame_browser_controller.cpp
     src/ui/frame_grouping_panel.h
     src/ui/frame_grouping_panel.cpp
+    src/ui/framing_controller.h
+    src/ui/framing_controller.cpp
+    src/ui/inspection_controller.h
+    src/ui/inspection_controller.cpp
     src/ui/bitstream_sync_discovery_dialog.h
     src/ui/bitstream_sync_discovery_dialog.cpp
     src/ui/live_bit_viewer_widget.h
     src/ui/live_bit_viewer_widget.cpp
     src/ui/main_window.h
+    src/ui/main_window_internal.h
     src/ui/main_window.cpp
+    src/ui/main_window_file_ops.cpp
+    src/ui/main_window_columns.cpp
 )
 
 qt_add_executable(bitabyte_cpp_byte_mode

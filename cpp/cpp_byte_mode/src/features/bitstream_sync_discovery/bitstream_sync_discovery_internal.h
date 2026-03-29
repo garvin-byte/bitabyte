@@ -452,14 +452,21 @@ struct DeduplicationKey {
 }
 
 [[nodiscard]] inline int screenedPatternPerWidthKeepCount(const BitstreamSyncDiscoverySettings& settings) {
+    const auto maybeTightenForStaticOnly = [&settings](int keepCount) {
+        if (settings.lengthMode != BitstreamSyncDiscoveryLengthMode::StaticOnly) {
+            return keepCount;
+        }
+        return qMax(1, keepCount - 1);
+    };
+
     switch (settings.searchEffort) {
     case BitstreamSyncDiscoverySearchEffort::Fast:
-        return qBound(2, settings.maximumCandidatesPerWidth - 1, 3);
+        return maybeTightenForStaticOnly(qBound(2, settings.maximumCandidatesPerWidth - 1, 3));
     case BitstreamSyncDiscoverySearchEffort::Exhaustive:
-        return qBound(3, settings.maximumCandidatesPerWidth + 2, 8);
+        return maybeTightenForStaticOnly(qBound(3, settings.maximumCandidatesPerWidth + 2, 8));
     case BitstreamSyncDiscoverySearchEffort::Balanced:
     default:
-        return qBound(2, settings.maximumCandidatesPerWidth, 4);
+        return maybeTightenForStaticOnly(qBound(2, settings.maximumCandidatesPerWidth, 4));
     }
 }
 
@@ -468,26 +475,51 @@ struct DeduplicationKey {
     const BitstreamSyncDiscoverySettings& settings,
     int candidateCount
 ) {
+    const auto maybeTightenForStaticOnly = [&settings](int budget) {
+        if (settings.lengthMode != BitstreamSyncDiscoveryLengthMode::StaticOnly) {
+            return budget;
+        }
+
+        const int reducedBudget = qMax(settings.maximumResultCount, (budget * 3) / 4);
+        return qMin(budget, reducedBudget);
+    };
+
     switch (settings.searchEffort) {
     case BitstreamSyncDiscoverySearchEffort::Fast:
-        return qMin(candidateCount, qMax(widthCount * 4, settings.maximumResultCount * 3));
+        return qMin(
+            candidateCount,
+            maybeTightenForStaticOnly(qMax(widthCount * 4, settings.maximumResultCount * 3))
+        );
     case BitstreamSyncDiscoverySearchEffort::Exhaustive:
-        return qMin(candidateCount, qMax(widthCount * 10, settings.maximumResultCount * 8));
+        return qMin(
+            candidateCount,
+            maybeTightenForStaticOnly(qMax(widthCount * 10, settings.maximumResultCount * 8))
+        );
     case BitstreamSyncDiscoverySearchEffort::Balanced:
     default:
-        return qMin(candidateCount, qMax(widthCount * 6, settings.maximumResultCount * 4));
+        return qMin(
+            candidateCount,
+            maybeTightenForStaticOnly(qMax(widthCount * 6, settings.maximumResultCount * 4))
+        );
     }
 }
 
 [[nodiscard]] inline int screenedPreanalysisPerWidthKeepCount(const BitstreamSyncDiscoverySettings& settings) {
+    const auto maybeTightenForStaticOnly = [&settings](int keepCount) {
+        if (settings.lengthMode != BitstreamSyncDiscoveryLengthMode::StaticOnly) {
+            return keepCount;
+        }
+        return qMax(1, keepCount - 1);
+    };
+
     switch (settings.searchEffort) {
     case BitstreamSyncDiscoverySearchEffort::Fast:
-        return qBound(2, settings.maximumCandidatesPerWidth, 4);
+        return maybeTightenForStaticOnly(qBound(2, settings.maximumCandidatesPerWidth, 4));
     case BitstreamSyncDiscoverySearchEffort::Exhaustive:
-        return qBound(4, settings.maximumCandidatesPerWidth + 3, 10);
+        return maybeTightenForStaticOnly(qBound(4, settings.maximumCandidatesPerWidth + 3, 10));
     case BitstreamSyncDiscoverySearchEffort::Balanced:
     default:
-        return qBound(3, settings.maximumCandidatesPerWidth + 1, 6);
+        return maybeTightenForStaticOnly(qBound(3, settings.maximumCandidatesPerWidth + 1, 6));
     }
 }
 
@@ -496,14 +528,32 @@ struct DeduplicationKey {
     const BitstreamSyncDiscoverySettings& settings,
     int candidateCount
 ) {
+    const auto maybeTightenForStaticOnly = [&settings](int budget) {
+        if (settings.lengthMode != BitstreamSyncDiscoveryLengthMode::StaticOnly) {
+            return budget;
+        }
+
+        const int reducedBudget = qMax(settings.maximumResultCount, (budget * 3) / 4);
+        return qMin(budget, reducedBudget);
+    };
+
     switch (settings.searchEffort) {
     case BitstreamSyncDiscoverySearchEffort::Fast:
-        return qMin(candidateCount, qMax(widthCount * 4, settings.maximumResultCount * 4));
+        return qMin(
+            candidateCount,
+            maybeTightenForStaticOnly(qMax(widthCount * 4, settings.maximumResultCount * 4))
+        );
     case BitstreamSyncDiscoverySearchEffort::Exhaustive:
-        return qMin(candidateCount, qMax(widthCount * 10, settings.maximumResultCount * 9));
+        return qMin(
+            candidateCount,
+            maybeTightenForStaticOnly(qMax(widthCount * 10, settings.maximumResultCount * 9))
+        );
     case BitstreamSyncDiscoverySearchEffort::Balanced:
     default:
-        return qMin(candidateCount, qMax(widthCount * 5, settings.maximumResultCount * 5));
+        return qMin(
+            candidateCount,
+            maybeTightenForStaticOnly(qMax(widthCount * 5, settings.maximumResultCount * 5))
+        );
     }
 }
 
