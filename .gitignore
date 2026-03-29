@@ -1,5 +1,6 @@
 /cpp/build/
 /build/
 /test.bit
+/cpp/cpp_byte_mode/tester.bin
 __pycache__/
 *.pyc

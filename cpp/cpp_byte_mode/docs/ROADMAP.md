@@ -1,34 +1,30 @@
-# C++ Byte Mode Roadmap
+# Bitabyte C++ Roadmap
 
-This folder starts with byte mode only on purpose.
+The C++ app is already beyond the original "byte mode only" starting point. The current roadmap is about deepening the workflow and continuing cleanup.
 
-Phase 1: stable byte table foundation
+## Landed
 
-- file load and reload
-- drag and drop
+- raw byte browsing
 - bytes-per-row control
+- drag-drop and reload flow
 - CSV export
-- selection status
+- framing from typed or selected sync patterns
+- `Find Frames...` discovery dialog
+- column definitions and split views
+- field inspector and live bit viewer
+- frame grouping and branch filtering
+- controller-based reduction of `MainWindow` responsibilities
 
-Phase 2: framed byte mode
+## Next Likely Work
 
-- sync-defined framing from one bit-accurate match to the next
-- frame clear and reload behavior
-- frame boundary application tools
+- continue shrinking `MainWindow` by pulling more session/file behavior into focused controllers
+- improve public documentation and examples
+- keep refining `Find Frames...` ranking and readability
+- add more inspector/decode helpers where they materially help binary analysis
 
-Phase 3: byte-mode analysis tools
-
-- column definitions
-- field inspector
-- statistics and constant-column views
-- diff and comparison tools
-
-Phase 4: persistence and workflow
+## Longer-Term Ideas
 
 - workspace save/load
-- column definition import/export
-- multi-file workflows
-
-Phase 5: bit-mode port
-
-- only after byte mode is stable and the UX is proven
+- import/export of user-defined layouts or field definitions
+- richer multi-file comparison workflows
+- more advanced anomaly/statistics tooling once the core framed workflow is stable
