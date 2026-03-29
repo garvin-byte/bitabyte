@@ -1,1 +1,0 @@
-"""Shared Qt widgets."""

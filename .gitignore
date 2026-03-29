@@ -1,0 +1,5 @@
+/cpp/build/
+/build/
+/test.bit
+__pycache__/
+*.pyc
