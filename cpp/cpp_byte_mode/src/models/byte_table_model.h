@@ -99,6 +99,8 @@ public:
 
     void reload();
     void setConstantColumnHighlightEnabled(bool highlightEnabled);
+    void setCounterHighlightedVisibleColumns(const QSet<int>& counterVisibleColumns);
+    void setDetectedFieldDefinitions(const QVector<features::columns::ByteColumnDefinition>& detectedFieldDefinitions);
     void setSplitColumns(const QHash<int, SplitColumnState>& splitColumns);
 
 private:
@@ -184,6 +186,8 @@ private:
     data::ByteDataSource* dataSource_ = nullptr;
     features::framing::FrameLayout* frameLayout_ = nullptr;
     const QVector<features::columns::ByteColumnDefinition>* columnDefinitions_ = nullptr;
+    QVector<features::columns::ByteColumnDefinition> detectedFieldDefinitions_;
+    QVector<features::columns::ByteColumnDefinition> effectiveColumnDefinitions_;
     QHash<int, SplitColumnState> splitColumns_;
     QVector<features::columns::VisibleByteColumn> visibleColumns_;
     QVector<int> byteColumnStarts_;
@@ -191,6 +195,7 @@ private:
     QFont monospaceFont_;
     QFutureWatcher<QVector<int>>* constantHighlightWatcher_ = nullptr;
     QSet<int> constantVisibleColumnIndices_;
+    QSet<int> counterVisibleColumnIndices_;
     bool constantColumnHighlightEnabled_ = true;
     quint64 constantHighlightRequestId_ = 0;
     quint64 activeConstantHighlightRequestId_ = 0;

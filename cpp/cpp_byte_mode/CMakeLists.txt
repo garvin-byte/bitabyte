@@ -31,6 +31,8 @@ set(BITABYTE_CPP_BYTE_MODE_FILES
     src/features/columns/column_color_palette.h
     src/features/columns/column_color_palette.cpp
     src/features/columns/visible_byte_column.h
+    src/features/classification/frame_field_classification.h
+    src/features/classification/frame_field_classification.cpp
     src/features/export/byte_table_csv_exporter.h
     src/features/export/byte_table_csv_exporter.cpp
     src/features/frame_browser/frame_grouping.h
@@ -51,8 +53,12 @@ set(BITABYTE_CPP_BYTE_MODE_FILES
     src/ui/column_definition_dialog.cpp
     src/ui/column_definitions_panel.h
     src/ui/column_definitions_panel.cpp
+    src/ui/field_current_value_panel.h
+    src/ui/field_current_value_panel.cpp
     src/ui/field_inspector_panel.h
     src/ui/field_inspector_panel.cpp
+    src/ui/frame_field_hints_panel.h
+    src/ui/frame_field_hints_panel.cpp
     src/ui/frame_browser_controller.h
     src/ui/frame_browser_controller.cpp
     src/ui/frame_grouping_panel.h

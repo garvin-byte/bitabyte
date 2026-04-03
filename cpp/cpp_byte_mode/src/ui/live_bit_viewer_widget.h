@@ -1,5 +1,7 @@
 #pragma once
 
+#include <QColor>
+#include <QHash>
 #include <QVector>
 #include <QWidget>
 
@@ -19,6 +21,12 @@ class LiveBitViewerWidget final : public QWidget {
     Q_OBJECT
 
 public:
+    struct PreviewBitHighlight {
+        int absoluteStartBit = 0;
+        int absoluteEndBit = -1;
+        QColor color;
+    };
+
     explicit LiveBitViewerWidget(QWidget* parent = nullptr);
 
     void setPreviewSource(
@@ -28,7 +36,10 @@ public:
         int firstFrameRowIndex,
         int previewRowCount
     );
+    void setPreviewColumnHighlights(const QHash<int, QColor>& previewColumnHighlights);
+    void setPreviewBitHighlights(const QVector<PreviewBitHighlight>& previewBitHighlights);
     void setDisplayMode(const QString& displayMode);
+    void setAutoFitEnabled(bool enabled);
     void setCellSize(int cellSize);
 
     [[nodiscard]] QSize minimumSizeHint() const override;
@@ -59,10 +70,13 @@ private:
     QVector<PreviewColumn> previewColumns_;
     QString displayMode_ = QStringLiteral("squares");
     int requestedCellSize_ = 10;
+    bool autoFitEnabled_ = true;
     int maxFrameBits_ = 0;
     int autoFitBitCount_ = 0;
     int firstFrameRowIndex_ = 0;
     int previewRowCount_ = 0;
+    QHash<int, QColor> previewColumnHighlights_;
+    QVector<PreviewBitHighlight> previewBitHighlights_;
     QWidget* trackedViewport_ = nullptr;
 };
 

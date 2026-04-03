@@ -142,6 +142,7 @@ void FramingController::openBitstreamSyncDiscovery() {
     }
     inspectionController_.updateSelectionStatus();
     inspectionController_.refreshLiveBitViewer();
+    inspectionController_.scheduleFrameFieldHintsRefresh();
     statusBar_.showMessage(
         QStringLiteral("Applied frame result: %1 (%2 frames)")
             .arg(selectedCandidate->displayPattern)
@@ -169,6 +170,7 @@ void FramingController::clearFraming() {
     }
     inspectionController_.updateSelectionStatus();
     inspectionController_.refreshLiveBitViewer();
+    inspectionController_.scheduleFrameFieldHintsRefresh();
     statusBar_.showMessage(QStringLiteral("Cleared framing"), 3000);
 }
 
@@ -207,6 +209,7 @@ void FramingController::applyFrameRowOrder(
     }
     inspectionController_.refreshLiveBitViewer();
     inspectionController_.refreshFieldInspector();
+    inspectionController_.scheduleFrameFieldHintsRefresh();
     statusBar_.showMessage(
         QStringLiteral("Frame order: %1 %2")
             .arg(rowOrderMode == features::framing::FrameLayout::RowOrderMode::Length
@@ -262,6 +265,7 @@ bool FramingController::applySyncFramingPattern(const QString& patternText, QStr
     }
     inspectionController_.updateSelectionStatus();
     inspectionController_.refreshLiveBitViewer();
+    inspectionController_.scheduleFrameFieldHintsRefresh();
     statusBar_.showMessage(
         QStringLiteral("Framed into %1 rows from %2 sync match%3")
             .arg(searchResult->frameSpans.size())
@@ -326,6 +330,7 @@ void FramingController::upsertSyncDefinition(int startBit, int totalBits, const 
     }
     inspectionController_.updateSelectionStatus();
     inspectionController_.refreshLiveBitViewer();
+    inspectionController_.scheduleFrameFieldHintsRefresh();
 }
 
 }  // namespace bitabyte::ui

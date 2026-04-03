@@ -2,9 +2,11 @@
 
 #include <QDialog>
 #include <QVector>
+#include <QtTypes>
 
 #include <optional>
 
+#include "features/classification/frame_field_classification.h"
 #include "features/bitstream_sync_discovery/bitstream_sync_discovery_types.h"
 
 class QLabel;
@@ -15,6 +17,8 @@ class QDoubleSpinBox;
 class QSpinBox;
 class QTableWidget;
 class QThread;
+template <typename T>
+class QFutureWatcher;
 
 namespace bitabyte::data {
 class ByteDataSource;
@@ -22,6 +26,10 @@ class ByteDataSource;
 
 namespace bitabyte::features::columns {
 struct VisibleByteColumn;
+}
+
+namespace bitabyte::features::classification {
+struct FrameFieldClassificationResult;
 }
 
 namespace bitabyte::features::bitstream_sync_discovery {
@@ -35,6 +43,7 @@ class FrameLayout;
 namespace bitabyte::ui {
 
 class LiveBitViewerWidget;
+class FrameFieldHintsPanel;
 
 class BitstreamSyncDiscoveryDialog final : public QDialog {
     Q_OBJECT
@@ -70,6 +79,12 @@ private:
     void stopWorkerThread();
     void refreshResultsTable(const QString& preferredCandidateKey = QString());
     void updatePreviewForCandidateIndex(int candidateIndex);
+    void startPreviewAnalysis(
+        const QString& candidateKey,
+        const features::framing::FrameLayout& analysisFrameLayout,
+        const QVector<features::classification::FrameFieldColumnSnapshot>& columnSnapshots,
+        int universalEndBit
+    );
     void clearPreview();
     [[nodiscard]] QVector<features::framing::FrameSpan> previewFrameSpansForCandidate(
         const bitabyte::features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidate& candidate
@@ -79,7 +94,8 @@ private:
     ) const;
     [[nodiscard]] QString candidateSummaryText(
         const bitabyte::features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidate& candidate,
-        int previewFrameCount
+        int previewFrameCount,
+        int displayedPreviewRowCount
     ) const;
     void applyPreviewRowOrder(
         features::framing::FrameLayout::RowOrderMode rowOrderMode,
@@ -87,13 +103,17 @@ private:
     );
     void updatePreviewRowOrderButtons();
     [[nodiscard]] QVector<features::columns::VisibleByteColumn> previewColumnsForBitRange(
-        int startBit,
-        int endBit
+        int syncBitWidth,
+        int previewFrameBitWidth
+    ) const;
+    [[nodiscard]] QVector<features::classification::FrameFieldColumnSnapshot> previewColumnSnapshots(
+        const QVector<features::columns::VisibleByteColumn>& previewColumns
     ) const;
 
     data::ByteDataSource* dataSource_ = nullptr;
     features::framing::FrameLayout* previewFrameLayout_ = nullptr;
     LiveBitViewerWidget* previewBitViewer_ = nullptr;
+    FrameFieldHintsPanel* previewHintsPanel_ = nullptr;
     QTableWidget* resultsTableWidget_ = nullptr;
     QSpinBox* minimumBitsSpinBox_ = nullptr;
     QSpinBox* maximumBitsSpinBox_ = nullptr;
@@ -114,11 +134,15 @@ private:
     QPushButton* applyButton_ = nullptr;
     QThread* workerThread_ = nullptr;
     features::bitstream_sync_discovery::BitstreamSyncDiscoveryWorker* worker_ = nullptr;
+    QFutureWatcher<features::classification::FrameFieldClassificationResult>* previewAnalysisWatcher_ = nullptr;
     features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidateList candidates_;
     QString previewedCandidateKey_;
+    QString activePreviewAnalysisCandidateKey_;
     int appliedCandidateIndex_ = -1;
     bool previewChronologicalDescending_ = false;
     bool previewLengthDescending_ = false;
+    quint64 previewAnalysisRequestId_ = 0;
+    quint64 activePreviewAnalysisRequestId_ = 0;
 };
 
 }  // namespace bitabyte::ui

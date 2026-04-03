@@ -248,6 +248,7 @@ std::optional<FrameSyncSearchResult> FrameSyncSearch::findBitAccurateMatches(
 
         ++searchResult.matchCount;
         matchBits.append(startBit);
+        startBit += patternBitCount - 1; // skip past this match to prevent overlapping matches
     }
 
     if (searchResult.matchCount == 0) {

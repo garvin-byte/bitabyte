@@ -3,6 +3,7 @@
 #include "data/byte_data_source.h"
 #include "features/framing/frame_layout.h"
 
+#include <QColor>
 #include <QEvent>
 #include <QPaintEvent>
 #include <QPainter>
@@ -71,12 +72,54 @@ void LiveBitViewerWidget::setPreviewSource(
     update();
 }
 
+void LiveBitViewerWidget::setPreviewColumnHighlights(const QHash<int, QColor>& previewColumnHighlights) {
+    if (previewColumnHighlights_ == previewColumnHighlights) {
+        return;
+    }
+
+    previewColumnHighlights_ = previewColumnHighlights;
+    update();
+}
+
+void LiveBitViewerWidget::setPreviewBitHighlights(const QVector<PreviewBitHighlight>& previewBitHighlights) {
+    if (previewBitHighlights_.size() == previewBitHighlights.size()) {
+        bool allEqual = true;
+        for (int highlightIndex = 0; highlightIndex < previewBitHighlights.size(); ++highlightIndex) {
+            const PreviewBitHighlight& leftHighlight = previewBitHighlights_.at(highlightIndex);
+            const PreviewBitHighlight& rightHighlight = previewBitHighlights.at(highlightIndex);
+            if (leftHighlight.absoluteStartBit != rightHighlight.absoluteStartBit
+                || leftHighlight.absoluteEndBit != rightHighlight.absoluteEndBit
+                || leftHighlight.color != rightHighlight.color) {
+                allEqual = false;
+                break;
+            }
+        }
+        if (allEqual) {
+            return;
+        }
+    }
+
+    previewBitHighlights_ = previewBitHighlights;
+    update();
+}
+
 void LiveBitViewerWidget::setDisplayMode(const QString& displayMode) {
     if (displayMode_ == displayMode) {
         return;
     }
 
     displayMode_ = displayMode;
+    updateCanvasSize();
+    update();
+}
+
+void LiveBitViewerWidget::setAutoFitEnabled(bool enabled) {
+    if (autoFitEnabled_ == enabled) {
+        return;
+    }
+
+    autoFitEnabled_ = enabled;
+    attachViewportResizeTracking();
     updateCanvasSize();
     update();
 }
@@ -108,7 +151,10 @@ QSize LiveBitViewerWidget::sizeHint() const {
 }
 
 bool LiveBitViewerWidget::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == trackedViewport_ && event != nullptr && event->type() == QEvent::Type::Resize) {
+    if (autoFitEnabled_
+        && watched == trackedViewport_
+        && event != nullptr
+        && event->type() == QEvent::Type::Resize) {
         updateCanvasSize();
         update();
     }
@@ -139,7 +185,11 @@ void LiveBitViewerWidget::showEvent(QShowEvent* showEvent) {
 
 int LiveBitViewerWidget::effectiveCellSize() const {
     const int requestedCellSize = qMax(4, requestedCellSize_);
-    if (previewColumns_.isEmpty() || previewRowCount_ <= 0 || maxFrameBits_ <= 0 || displayMode_ == QStringLiteral("binary")
+    if (!autoFitEnabled_
+        || previewColumns_.isEmpty()
+        || previewRowCount_ <= 0
+        || maxFrameBits_ <= 0
+        || displayMode_ == QStringLiteral("binary")
         || displayMode_ == QStringLiteral("hex")) {
         return requestedCellSize;
     }
@@ -168,6 +218,14 @@ int LiveBitViewerWidget::availableViewportHeight() const {
 }
 
 void LiveBitViewerWidget::attachViewportResizeTracking() {
+    if (!autoFitEnabled_) {
+        if (trackedViewport_ != nullptr) {
+            trackedViewport_->removeEventFilter(this);
+            trackedViewport_ = nullptr;
+        }
+        return;
+    }
+
     QWidget* viewport = parentWidget();
     if (trackedViewport_ == viewport) {
         return;
@@ -185,8 +243,18 @@ void LiveBitViewerWidget::attachViewportResizeTracking() {
 
 void LiveBitViewerWidget::updateCanvasSize() {
     const QSize canvasSize = sizeHint();
-    setMinimumSize(canvasSize);
-    resize(canvasSize);
+    const bool minimumSizeChanged = minimumSize() != canvasSize;
+    const bool widgetSizeChanged = size() != canvasSize;
+    if (!minimumSizeChanged && !widgetSizeChanged) {
+        return;
+    }
+
+    if (minimumSizeChanged) {
+        setMinimumSize(canvasSize);
+    }
+    if (widgetSizeChanged) {
+        resize(canvasSize);
+    }
     updateGeometry();
 }
 
@@ -231,6 +299,11 @@ void LiveBitViewerWidget::paintFrames(QPainter* painter, const QRect& clipRect) 
         firstVisiblePreviewBit,
         (clipRect.right() - kRowLabelWidth - kCanvasPadding) / cellSize
     );
+    const int drawRight = kRowLabelWidth + kCanvasPadding + ((lastVisiblePreviewBit + 1) * cellSize);
+    if (drawRight < clipRect.left()) {
+        painter->restore();
+        return;
+    }
 
     for (int row = firstVisibleRow; row <= lastVisibleRow; ++row) {
         const int frameRowIndex = firstFrameRowIndex_ + row;
@@ -250,11 +323,15 @@ void LiveBitViewerWidget::paintFrames(QPainter* painter, const QRect& clipRect) 
             );
         }
 
-        for (const PreviewColumn& previewColumn : previewColumns_) {
+        int highlightIndex = 0;
+        for (int previewColumnIndex = 0; previewColumnIndex < previewColumns_.size(); ++previewColumnIndex) {
+            const PreviewColumn& previewColumn = previewColumns_.at(previewColumnIndex);
             const int previewColumnEndBit = previewColumn.previewBitStart + previewColumn.bitWidth - 1;
             if (previewColumnEndBit < firstVisiblePreviewBit || previewColumn.previewBitStart > lastVisiblePreviewBit) {
                 continue;
             }
+
+            const QColor previewColumnHighlightColor = previewColumnHighlights_.value(previewColumnIndex, QColor());
 
             for (int bitOffset = 0; bitOffset < previewColumn.bitWidth; ++bitOffset) {
                 const int relativeBit = previewColumn.visibleColumn.absoluteStartBit + bitOffset;
@@ -269,18 +346,45 @@ void LiveBitViewerWidget::paintFrames(QPainter* painter, const QRect& clipRect) 
                 const int cellX = kRowLabelWidth + kCanvasPadding + (previewBitIndex * cellSize);
                 const QRect cellRect(cellX, rowY, cellSize, cellSize);
                 const bool bitIsOne = dataSource_->bitAt(rowStartBit + relativeBit) != 0;
+                const QRect paintedCellRect = cellRect.adjusted(0, 0, -1, -1);
+                while (highlightIndex < previewBitHighlights_.size()
+                    && previewBitHighlights_.at(highlightIndex).absoluteEndBit < relativeBit) {
+                    ++highlightIndex;
+                }
+                QColor bitHighlightColor;
+                if (highlightIndex < previewBitHighlights_.size()) {
+                    const PreviewBitHighlight& previewBitHighlight = previewBitHighlights_.at(highlightIndex);
+                    if (relativeBit >= previewBitHighlight.absoluteStartBit
+                        && relativeBit <= previewBitHighlight.absoluteEndBit) {
+                        bitHighlightColor = previewBitHighlight.color;
+                    }
+                }
+                const QColor effectiveHighlightColor =
+                    bitHighlightColor.isValid() ? bitHighlightColor : previewColumnHighlightColor;
+                const bool hasHighlight = effectiveHighlightColor.isValid();
+
+                if (hasHighlight) {
+                    painter->fillRect(paintedCellRect, effectiveHighlightColor);
+                }
 
                 if (useCircleGlyphs) {
                     painter->setPen(QPen(QColor(100, 100, 100), 1));
                     painter->setBrush(bitIsOne ? QBrush(QColor(0, 0, 0)) : QBrush(QColor(255, 255, 255)));
-                    painter->drawEllipse(cellRect.adjusted(0, 0, -1, -1));
+                    painter->drawEllipse(hasHighlight ? paintedCellRect.adjusted(1, 1, -1, -1) : paintedCellRect);
                     continue;
                 }
 
-                painter->fillRect(cellRect.adjusted(0, 0, -1, -1), bitIsOne ? QColor(0, 0, 0) : QColor(255, 255, 255));
+                if (hasHighlight) {
+                    painter->fillRect(
+                        paintedCellRect.adjusted(1, 1, -1, -1),
+                        bitIsOne ? QColor(0, 0, 0) : QColor(255, 255, 255)
+                    );
+                } else {
+                    painter->fillRect(paintedCellRect, bitIsOne ? QColor(0, 0, 0) : QColor(255, 255, 255));
+                }
                 if (cellSize >= 3) {
                     painter->setPen(QPen(QColor(180, 180, 180), 1));
-                    painter->drawRect(cellRect.adjusted(0, 0, -1, -1));
+                    painter->drawRect(paintedCellRect);
                 }
             }
         }

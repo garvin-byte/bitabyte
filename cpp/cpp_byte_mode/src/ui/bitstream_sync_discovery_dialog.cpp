@@ -1,14 +1,21 @@
 #include "ui/bitstream_sync_discovery_dialog.h"
 
 #include "data/byte_data_source.h"
+#include "features/classification/frame_field_classification.h"
 #include "features/bitstream_sync_discovery/bitstream_sync_discovery_worker.h"
 #include "features/columns/visible_byte_column.h"
 #include "features/framing/frame_layout.h"
+#include "ui/frame_field_hints_panel.h"
 #include "ui/live_bit_viewer_widget.h"
+
+#include <QtConcurrent>
 
 #include <QAbstractItemView>
 #include <QComboBox>
+#include <QColor>
 #include <QDoubleSpinBox>
+#include <QFutureWatcher>
+#include <QGroupBox>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -36,6 +43,7 @@ constexpr int kMedianBytesColumn = 5;
 constexpr int kGroupsColumn = 6;
 constexpr int kCliffsColumn = 7;
 constexpr int kScoreColumn = 8;
+constexpr int kMaximumDiscoveryPreviewRows = 128;
 
 QString bitLengthLabel(qsizetype lengthBits) {
     return QStringLiteral("%1 bits (%2 bytes)")
@@ -76,12 +84,177 @@ QString rowOrderButtonLabel(const QString& labelText, bool descending) {
         .arg(descending ? QStringLiteral("↓") : QStringLiteral("↑"));
 }
 
+const QColor kCounterHighlightColor(212, 232, 255);
+const QColor kConstantHighlightColor(255, 247, 196);
+
+QString previewFieldLabel(const features::columns::VisibleByteColumn& visibleColumn) {
+    const bool startsOnByteBoundary = visibleColumn.absoluteStartBit % 8 == 0;
+    const bool endsOnByteBoundary = visibleColumn.absoluteEndBit % 8 == 7;
+    const int startByteIndex = visibleColumn.absoluteStartBit / 8;
+    const int endByteIndex = visibleColumn.absoluteEndBit / 8;
+
+    if (startsOnByteBoundary && endsOnByteBoundary) {
+        return startByteIndex == endByteIndex
+            ? QStringLiteral("Byte %1").arg(startByteIndex)
+            : QStringLiteral("Bytes %1-%2").arg(startByteIndex).arg(endByteIndex);
+    }
+
+    return QStringLiteral("Bits %1-%2")
+        .arg(visibleColumn.absoluteStartBit)
+        .arg(visibleColumn.absoluteEndBit);
+}
+
+QVector<LiveBitViewerWidget::PreviewBitHighlight> previewBitHighlightRanges(
+    const features::classification::FrameFieldClassificationResult& classificationResult
+) {
+    QVector<LiveBitViewerWidget::PreviewBitHighlight> previewBitHighlights;
+    previewBitHighlights.reserve(
+        classificationResult.constantHints.size() + classificationResult.counterHints.size()
+    );
+
+    for (const features::classification::FrameFieldHint& constantHint : classificationResult.constantHints) {
+        LiveBitViewerWidget::PreviewBitHighlight bitHighlight;
+        bitHighlight.absoluteStartBit = constantHint.absoluteStartBit;
+        bitHighlight.absoluteEndBit = constantHint.absoluteEndBit;
+        bitHighlight.color = kConstantHighlightColor;
+        previewBitHighlights.append(bitHighlight);
+    }
+    for (const features::classification::FrameFieldHint& counterHint : classificationResult.counterHints) {
+        LiveBitViewerWidget::PreviewBitHighlight bitHighlight;
+        bitHighlight.absoluteStartBit = counterHint.absoluteStartBit;
+        bitHighlight.absoluteEndBit = counterHint.absoluteEndBit;
+        bitHighlight.color = kCounterHighlightColor;
+        previewBitHighlights.append(bitHighlight);
+    }
+
+    std::sort(
+        previewBitHighlights.begin(),
+        previewBitHighlights.end(),
+        [](const LiveBitViewerWidget::PreviewBitHighlight& leftHighlight,
+           const LiveBitViewerWidget::PreviewBitHighlight& rightHighlight) {
+            if (leftHighlight.absoluteStartBit != rightHighlight.absoluteStartBit) {
+                return leftHighlight.absoluteStartBit < rightHighlight.absoluteStartBit;
+            }
+            return leftHighlight.absoluteEndBit < rightHighlight.absoluteEndBit;
+        }
+    );
+    return previewBitHighlights;
+}
+
+QVector<features::framing::FrameSpan> limitedPreviewFrameSpans(
+    const QVector<features::framing::FrameSpan>& previewFrameSpans,
+    features::framing::FrameLayout::RowOrderMode rowOrderMode,
+    bool descending
+) {
+    if (previewFrameSpans.size() <= kMaximumDiscoveryPreviewRows) {
+        return previewFrameSpans;
+    }
+
+    QVector<int> orderedIndices;
+    orderedIndices.reserve(previewFrameSpans.size());
+    for (int frameIndex = 0; frameIndex < previewFrameSpans.size(); ++frameIndex) {
+        orderedIndices.append(frameIndex);
+    }
+
+    std::stable_sort(
+        orderedIndices.begin(),
+        orderedIndices.end(),
+        [&previewFrameSpans, rowOrderMode, descending](int leftIndex, int rightIndex) {
+            if (leftIndex < 0 || leftIndex >= previewFrameSpans.size()
+                || rightIndex < 0 || rightIndex >= previewFrameSpans.size()) {
+                return leftIndex < rightIndex;
+            }
+
+            const features::framing::FrameSpan& leftFrameSpan = previewFrameSpans.at(leftIndex);
+            const features::framing::FrameSpan& rightFrameSpan = previewFrameSpans.at(rightIndex);
+            if (rowOrderMode == features::framing::FrameLayout::RowOrderMode::Length
+                && leftFrameSpan.lengthBits != rightFrameSpan.lengthBits) {
+                return descending
+                    ? leftFrameSpan.lengthBits > rightFrameSpan.lengthBits
+                    : leftFrameSpan.lengthBits < rightFrameSpan.lengthBits;
+            }
+
+            return descending ? leftIndex > rightIndex : leftIndex < rightIndex;
+        }
+    );
+
+    QVector<features::framing::FrameSpan> limitedFrameSpans;
+    limitedFrameSpans.reserve(kMaximumDiscoveryPreviewRows);
+    QVector<int> selectedIndices;
+    selectedIndices.reserve(kMaximumDiscoveryPreviewRows);
+    for (int orderedIndex = 0; orderedIndex < kMaximumDiscoveryPreviewRows; ++orderedIndex) {
+        selectedIndices.append(orderedIndices.at(orderedIndex));
+    }
+    std::sort(selectedIndices.begin(), selectedIndices.end());
+    for (int selectedIndex : selectedIndices) {
+        limitedFrameSpans.append(previewFrameSpans.at(selectedIndex));
+    }
+    return limitedFrameSpans;
+}
+
+features::classification::FrameFieldClassificationResult analyzePreviewFields(
+    const data::ByteDataSource& dataSource,
+    const features::framing::FrameLayout& frameLayout,
+    const QVector<features::classification::FrameFieldColumnSnapshot>& columnSnapshots,
+    int universalEndBit
+) {
+    features::classification::FrameFieldClassificationResult previewClassificationResult =
+        features::classification::classifyFramedVisibleColumns(
+            dataSource,
+            frameLayout,
+            columnSnapshots
+        );
+    if (universalEndBit < 0) {
+        return previewClassificationResult;
+    }
+
+    const QVector<features::classification::FrameFieldHint> discoveredCounterHints =
+        features::classification::discoverCounterHintsByBitWindow(
+            dataSource,
+            frameLayout,
+            columnSnapshots,
+            0,
+            universalEndBit
+        );
+    for (const features::classification::FrameFieldHint& counterHint : discoveredCounterHints) {
+        bool alreadyCovered = false;
+        for (const features::classification::FrameFieldHint& existingHint : previewClassificationResult.counterHints) {
+            if (!(counterHint.absoluteEndBit < existingHint.absoluteStartBit
+                || existingHint.absoluteEndBit < counterHint.absoluteStartBit)) {
+                alreadyCovered = true;
+                break;
+            }
+        }
+        if (alreadyCovered) {
+            continue;
+        }
+
+        previewClassificationResult.counterHints.append(counterHint);
+        for (int visibleColumnIndex : counterHint.visibleColumnIndices) {
+            previewClassificationResult.counterVisibleColumnIndices.insert(visibleColumnIndex);
+        }
+    }
+    std::sort(
+        previewClassificationResult.counterHints.begin(),
+        previewClassificationResult.counterHints.end(),
+        [](const features::classification::FrameFieldHint& leftHint,
+           const features::classification::FrameFieldHint& rightHint) {
+            if (leftHint.absoluteStartBit != rightHint.absoluteStartBit) {
+                return leftHint.absoluteStartBit < rightHint.absoluteStartBit;
+            }
+            return leftHint.absoluteEndBit < rightHint.absoluteEndBit;
+        }
+    );
+    return previewClassificationResult;
+}
+
 }  // namespace
 
 BitstreamSyncDiscoveryDialog::BitstreamSyncDiscoveryDialog(data::ByteDataSource* dataSource, QWidget* parent)
     : QDialog(parent),
       dataSource_(dataSource),
-      previewFrameLayout_(new features::framing::FrameLayout()) {
+      previewFrameLayout_(new features::framing::FrameLayout()),
+      previewAnalysisWatcher_(new QFutureWatcher<features::classification::FrameFieldClassificationResult>(this)) {
     qRegisterMetaType<features::bitstream_sync_discovery::BitstreamSyncDiscoveryProgressUpdate>();
     qRegisterMetaType<features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidate>();
     qRegisterMetaType<features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidateList>();
@@ -91,6 +264,38 @@ BitstreamSyncDiscoveryDialog::BitstreamSyncDiscoveryDialog(data::ByteDataSource*
     resize(1280, 760);
     buildLayout();
     setScanningState(false);
+
+    connect(
+        previewAnalysisWatcher_,
+        &QFutureWatcher<features::classification::FrameFieldClassificationResult>::finished,
+        this,
+        [this]() {
+            if (previewAnalysisWatcher_ == nullptr) {
+                return;
+            }
+
+            if (activePreviewAnalysisRequestId_ == previewAnalysisRequestId_
+                && activePreviewAnalysisCandidateKey_ == previewedCandidateKey_) {
+                const features::classification::FrameFieldClassificationResult classificationResult =
+                    previewAnalysisWatcher_->result();
+                if (previewBitViewer_ != nullptr) {
+                    previewBitViewer_->setPreviewColumnHighlights({});
+                    previewBitViewer_->setPreviewBitHighlights(previewBitHighlightRanges(classificationResult));
+                }
+                if (previewHintsPanel_ != nullptr) {
+                    previewHintsPanel_->setHints(classificationResult);
+                }
+                return;
+            }
+
+            const int currentRow = resultsTableWidget_ != nullptr ? resultsTableWidget_->currentRow() : -1;
+            if (currentRow >= 0 && currentRow < candidates_.size()) {
+                updatePreviewForCandidateIndex(currentRow);
+            } else {
+                clearPreview();
+            }
+        }
+    );
 }
 
 BitstreamSyncDiscoveryDialog::~BitstreamSyncDiscoveryDialog() {
@@ -187,8 +392,10 @@ void BitstreamSyncDiscoveryDialog::handleProgressChanged(
 void BitstreamSyncDiscoveryDialog::handlePartialResultsReady(
     const features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidateList& candidates
 ) {
-    const QString preferredCandidateKey = selectedCandidate().has_value()
-        ? candidateKey(*selectedCandidate())
+    const std::optional<features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidate> currentCandidate =
+        selectedCandidate();
+    const QString preferredCandidateKey = currentCandidate.has_value()
+        ? candidateKey(*currentCandidate)
         : QString();
     candidates_ = candidates;
     refreshResultsTable(preferredCandidateKey);
@@ -362,6 +569,10 @@ void BitstreamSyncDiscoveryDialog::buildLayout() {
     rootLayout->addWidget(progressBar_);
 
     QSplitter* contentSplitter = new QSplitter(Qt::Horizontal, this);
+    QWidget* leftPaneWidget = new QWidget(this);
+    QVBoxLayout* leftPaneLayout = new QVBoxLayout(leftPaneWidget);
+    leftPaneLayout->setContentsMargins(0, 0, 0, 0);
+    leftPaneLayout->setSpacing(8);
 
     resultsTableWidget_ = new QTableWidget(this);
     resultsTableWidget_->setColumnCount(9);
@@ -393,7 +604,16 @@ void BitstreamSyncDiscoveryDialog::buildLayout() {
     resultsTableWidget_->horizontalHeader()->setSectionResizeMode(kCliffsColumn, QHeaderView::ResizeMode::ResizeToContents);
     resultsTableWidget_->horizontalHeader()->setSectionResizeMode(kScoreColumn, QHeaderView::ResizeMode::ResizeToContents);
     connect(resultsTableWidget_, &QTableWidget::itemSelectionChanged, this, &BitstreamSyncDiscoveryDialog::updatePreviewForSelection);
-    contentSplitter->addWidget(resultsTableWidget_);
+    leftPaneLayout->addWidget(resultsTableWidget_, 1);
+
+    QGroupBox* previewHintsGroup = new QGroupBox(QStringLiteral("Detected Fields"), leftPaneWidget);
+    QVBoxLayout* previewHintsLayout = new QVBoxLayout(previewHintsGroup);
+    previewHintsLayout->setContentsMargins(8, 8, 8, 8);
+    previewHintsLayout->setSpacing(6);
+    previewHintsPanel_ = new FrameFieldHintsPanel(previewHintsGroup);
+    previewHintsLayout->addWidget(previewHintsPanel_);
+    leftPaneLayout->addWidget(previewHintsGroup);
+    contentSplitter->addWidget(leftPaneWidget);
 
     QWidget* previewWidget = new QWidget(this);
     QVBoxLayout* previewLayout = new QVBoxLayout(previewWidget);
@@ -421,7 +641,8 @@ void BitstreamSyncDiscoveryDialog::buildLayout() {
     previewScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
 
     previewBitViewer_ = new LiveBitViewerWidget(previewScrollArea);
-    previewBitViewer_->setCellSize(14);
+    previewBitViewer_->setAutoFitEnabled(false);
+    previewBitViewer_->setCellSize(8);
     previewBitViewer_->setMinimumHeight(520);
     previewScrollArea->setWidget(previewBitViewer_);
     previewLayout->addWidget(previewScrollArea, 1);
@@ -551,15 +772,22 @@ void BitstreamSyncDiscoveryDialog::updatePreviewForCandidateIndex(int candidateI
     const features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidate& candidate = candidates_.at(candidateIndex);
 
     const QVector<features::framing::FrameSpan> previewFrameSpans = previewFrameSpansForCandidate(candidate);
-    previewFrameLayout_->setFrames(previewFrameSpans);
-
-    const int previewFrameBitWidth = qMax(
-        candidate.refinedPattern.bitWidth,
-        static_cast<int>(candidate.frameLengthSummary.maximumLengthBits)
+    const QVector<features::framing::FrameSpan> displayedPreviewFrameSpans = limitedPreviewFrameSpans(
+        previewFrameSpans,
+        previewFrameLayout_->rowOrderMode(),
+        previewFrameLayout_->rowOrderDescending()
     );
+    previewFrameLayout_->setFrames(displayedPreviewFrameSpans);
+
+    int previewFrameBitWidth = candidate.refinedPattern.bitWidth;
+    for (const features::framing::FrameSpan& previewFrameSpan : displayedPreviewFrameSpans) {
+        previewFrameBitWidth = qMax(previewFrameBitWidth, static_cast<int>(previewFrameSpan.lengthBits));
+    }
     const QVector<features::columns::VisibleByteColumn> syncPreviewColumns =
-        previewColumnsForBitRange(0, previewFrameBitWidth - 1);
-    const int previewRowCount = previewFrameSpans.size();
+        previewColumnsForBitRange(candidate.refinedPattern.bitWidth, previewFrameBitWidth);
+    const QVector<features::classification::FrameFieldColumnSnapshot> previewColumnSnapshotsForCandidate =
+        previewColumnSnapshots(syncPreviewColumns);
+    const int previewRowCount = displayedPreviewFrameSpans.size();
     previewBitViewer_->setPreviewSource(
         dataSource_,
         previewFrameLayout_,
@@ -567,16 +795,77 @@ void BitstreamSyncDiscoveryDialog::updatePreviewForCandidateIndex(int candidateI
         0,
         previewRowCount
     );
+    previewBitViewer_->setPreviewColumnHighlights({});
+    if (previewHintsPanel_ != nullptr) {
+        previewHintsPanel_->setPendingAnalysis();
+    }
 
-    previewSummaryLabel_->setText(candidateSummaryText(candidate, previewRowCount));
+    previewBitViewer_->setPreviewBitHighlights({});
+    previewSummaryLabel_->setText(candidateSummaryText(candidate, previewFrameSpans.size(), previewRowCount));
     previewSummaryLabel_->setVisible(true);
     previewedCandidateKey_ = candidateKey(candidate);
     applyButton_->setEnabled(true);
+    features::framing::FrameLayout analysisFrameLayout;
+    analysisFrameLayout.setFrames(previewFrameSpans);
+    analysisFrameLayout.setRowOrder(
+        previewFrameLayout_->rowOrderMode(),
+        previewFrameLayout_->rowOrderDescending()
+    );
+    startPreviewAnalysis(
+        previewedCandidateKey_,
+        analysisFrameLayout,
+        previewColumnSnapshotsForCandidate,
+        static_cast<int>(candidate.frameLengthSummary.minimumLengthBits) - 1
+    );
+}
+
+void BitstreamSyncDiscoveryDialog::startPreviewAnalysis(
+    const QString& candidateKey,
+    const features::framing::FrameLayout& analysisFrameLayout,
+    const QVector<features::classification::FrameFieldColumnSnapshot>& columnSnapshots,
+    int universalEndBit
+) {
+    ++previewAnalysisRequestId_;
+    if (dataSource_ == nullptr
+        || !dataSource_->hasData()
+        || !analysisFrameLayout.isFramed()
+        || columnSnapshots.isEmpty()) {
+        if (previewHintsPanel_ != nullptr) {
+            previewHintsPanel_->setHints(features::classification::FrameFieldClassificationResult{});
+        }
+        return;
+    }
+    if (previewAnalysisWatcher_ == nullptr || previewAnalysisWatcher_->isRunning()) {
+        return;
+    }
+
+    activePreviewAnalysisRequestId_ = previewAnalysisRequestId_;
+    activePreviewAnalysisCandidateKey_ = candidateKey;
+    const data::ByteDataSource dataSourceSnapshot = *dataSource_;
+    const features::framing::FrameLayout frameLayoutSnapshot = analysisFrameLayout;
+    const QVector<features::classification::FrameFieldColumnSnapshot> columnSnapshotsSnapshot = columnSnapshots;
+    previewAnalysisWatcher_->setFuture(QtConcurrent::run(
+        [dataSourceSnapshot, frameLayoutSnapshot, columnSnapshotsSnapshot, universalEndBit]() {
+            return analyzePreviewFields(
+                dataSourceSnapshot,
+                frameLayoutSnapshot,
+                columnSnapshotsSnapshot,
+                universalEndBit
+            );
+        }
+    ));
 }
 
 void BitstreamSyncDiscoveryDialog::clearPreview() {
+    ++previewAnalysisRequestId_;
+    activePreviewAnalysisCandidateKey_.clear();
     previewFrameLayout_->clearFrame();
     previewBitViewer_->setPreviewSource(nullptr, nullptr, {}, 0, 0);
+    previewBitViewer_->setPreviewColumnHighlights({});
+    previewBitViewer_->setPreviewBitHighlights({});
+    if (previewHintsPanel_ != nullptr) {
+        previewHintsPanel_->showUnavailable();
+    }
     previewSummaryLabel_->setText(QStringLiteral("Select a candidate to preview its framing and sync column."));
     previewSummaryLabel_->setVisible(true);
     previewedCandidateKey_.clear();
@@ -700,14 +989,27 @@ QVector<features::framing::FrameSpan> BitstreamSyncDiscoveryDialog::previewFrame
 
 QString BitstreamSyncDiscoveryDialog::candidateSummaryText(
     const features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidate& candidate,
-    int previewFrameCount
+    int previewFrameCount,
+    int displayedPreviewRowCount
 ) const {
-    const QString previewLabel = previewFrameCount != candidate.frameSpans.size()
-        ? QStringLiteral("Preview: expanded sparse candidate from %1 detected frames into %2 preview rows using median frame size\n")
-              .arg(candidate.frameSpans.size())
-              .arg(previewFrameCount)
-        : QStringLiteral("Preview: scroll to inspect all %1 framed rows\n")
-              .arg(candidate.frameSpans.size());
+    QString previewLabel;
+    if (displayedPreviewRowCount < previewFrameCount) {
+        previewLabel = previewFrameCount != candidate.frameSpans.size()
+            ? QStringLiteral("Preview: expanded sparse candidate from %1 detected frames into %2 rows; showing %3 rows\n")
+                  .arg(candidate.frameSpans.size())
+                  .arg(previewFrameCount)
+                  .arg(displayedPreviewRowCount)
+            : QStringLiteral("Preview: showing %1 of %2 framed rows\n")
+                  .arg(displayedPreviewRowCount)
+                  .arg(previewFrameCount);
+    } else {
+        previewLabel = previewFrameCount != candidate.frameSpans.size()
+            ? QStringLiteral("Preview: expanded sparse candidate from %1 detected frames into %2 preview rows using median frame size\n")
+                  .arg(candidate.frameSpans.size())
+                  .arg(previewFrameCount)
+            : QStringLiteral("Preview: scroll to inspect all %1 framed rows\n")
+                  .arg(candidate.frameSpans.size());
+    }
 
     return previewLabel + QStringLiteral(
                "Pattern: %1 | Tail: %2 | Width: %3 bits | Matches: %4 | Frames: %5 | Groups: %6 | Cliffs: %7\n"
@@ -739,18 +1041,15 @@ QString BitstreamSyncDiscoveryDialog::candidateSummaryText(
 }
 
 QVector<features::columns::VisibleByteColumn> BitstreamSyncDiscoveryDialog::previewColumnsForBitRange(
-    int startBit,
-    int endBit
+    int syncBitWidth,
+    int previewFrameBitWidth
 ) const {
     QVector<features::columns::VisibleByteColumn> previewColumns;
-    if (startBit > endBit) {
+    if (previewFrameBitWidth <= 0) {
         return previewColumns;
     }
 
-    int segmentStartBit = startBit;
-    while (segmentStartBit <= endBit) {
-        const int segmentEndBit = qMin(endBit, (((segmentStartBit / 8) + 1) * 8) - 1);
-
+    auto appendSegment = [&previewColumns](int segmentStartBit, int segmentEndBit, bool isUndefined) {
         features::columns::VisibleByteColumn visibleColumn;
         visibleColumn.byteIndex = segmentStartBit / 8;
         visibleColumn.byteEndIndex = segmentEndBit / 8;
@@ -758,12 +1057,59 @@ QVector<features::columns::VisibleByteColumn> BitstreamSyncDiscoveryDialog::prev
         visibleColumn.bitEnd = segmentEndBit % 8;
         visibleColumn.absoluteStartBit = segmentStartBit;
         visibleColumn.absoluteEndBit = segmentEndBit;
+        visibleColumn.isUndefined = isUndefined;
         previewColumns.append(visibleColumn);
+    };
 
-        segmentStartBit = segmentEndBit + 1;
+    const int boundedSyncWidth = qBound(0, syncBitWidth, previewFrameBitWidth);
+    if (boundedSyncWidth > 0) {
+        appendSegment(0, boundedSyncWidth - 1, false);
+    }
+
+    const int widthBytes = (previewFrameBitWidth + 7) / 8;
+    for (int byteIndex = 0; byteIndex < widthBytes; ++byteIndex) {
+        const int byteStartBit = byteIndex * 8;
+        const int byteEndBit = qMin(previewFrameBitWidth - 1, byteStartBit + 7);
+        if (byteEndBit < byteStartBit) {
+            continue;
+        }
+
+        const bool byteCoveredBySync = boundedSyncWidth > 0
+            && byteStartBit < boundedSyncWidth
+            && byteEndBit >= 0;
+        if (!byteCoveredBySync) {
+            appendSegment(byteStartBit, byteEndBit, false);
+            continue;
+        }
+
+        const int coveredStartBit = qMax(byteStartBit, 0);
+        const int coveredEndBit = qMin(byteEndBit, boundedSyncWidth - 1);
+        if (coveredStartBit > byteStartBit) {
+            appendSegment(byteStartBit, coveredStartBit - 1, true);
+        }
+        if (coveredEndBit < byteEndBit) {
+            appendSegment(coveredEndBit + 1, byteEndBit, true);
+        }
     }
 
     return previewColumns;
+}
+
+QVector<features::classification::FrameFieldColumnSnapshot> BitstreamSyncDiscoveryDialog::previewColumnSnapshots(
+    const QVector<features::columns::VisibleByteColumn>& previewColumns
+) const {
+    QVector<features::classification::FrameFieldColumnSnapshot> columnSnapshots;
+    columnSnapshots.reserve(previewColumns.size());
+    for (int visibleColumnIndex = 0; visibleColumnIndex < previewColumns.size(); ++visibleColumnIndex) {
+        const features::columns::VisibleByteColumn& visibleColumn = previewColumns.at(visibleColumnIndex);
+        features::classification::FrameFieldColumnSnapshot columnSnapshot;
+        columnSnapshot.visibleColumnIndex = visibleColumnIndex;
+        columnSnapshot.visibleColumn = visibleColumn;
+        columnSnapshot.label = previewFieldLabel(visibleColumn);
+        columnSnapshot.displayFormat = visibleColumn.bitWidth() == 1 ? QStringLiteral("binary") : QStringLiteral("hex");
+        columnSnapshots.append(columnSnapshot);
+    }
+    return columnSnapshots;
 }
 
 }  // namespace bitabyte::ui

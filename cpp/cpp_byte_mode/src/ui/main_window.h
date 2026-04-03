@@ -31,7 +31,9 @@ namespace bitabyte::ui {
 
 class ByteTableView;
 class ColumnDefinitionsPanel;
+class FieldCurrentValuePanel;
 class FieldInspectorPanel;
+class FrameFieldHintsPanel;
 class FrameBrowserController;
 class FrameGroupingPanel;
 class FramingController;
@@ -112,7 +114,9 @@ private:
     FrameGroupingPanel* frameGroupingPanel_ = nullptr;
     QDockWidget* liveBitViewerDock_ = nullptr;
     LiveBitViewerWidget* liveBitViewerWidget_ = nullptr;
+    FrameFieldHintsPanel* frameFieldHintsPanel_ = nullptr;
     FieldInspectorPanel* fieldInspectorPanel_ = nullptr;
+    FieldCurrentValuePanel* fieldCurrentValuePanel_ = nullptr;
     QButtonGroup* liveBitViewerModeGroup_ = nullptr;
     QSpinBox* liveBitViewerSizeSpinBox_ = nullptr;
     QPushButton* frameChronologicalOrderButton_ = nullptr;

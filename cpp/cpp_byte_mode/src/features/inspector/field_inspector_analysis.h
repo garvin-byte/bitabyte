@@ -59,7 +59,8 @@ struct FieldInspectorAnalysis {
     const data::ByteDataSource& dataSource,
     const features::framing::FrameLayout& frameLayout,
     const FieldSelection& fieldSelection,
-    int currentRow
+    int currentRow,
+    bool analyzeAllRows = true
 );
 
 }  // namespace bitabyte::features::inspector

@@ -28,9 +28,17 @@ struct FieldSelection;
 struct FieldInspectorAnalysis;
 }
 
+namespace bitabyte::features::classification {
+struct FrameFieldClassificationResult;
+struct FrameFieldColumnSnapshot;
+struct FrameFieldHint;
+}
+
 namespace bitabyte::ui {
 
 class ByteTableView;
+class FieldCurrentValuePanel;
+class FrameFieldHintsPanel;
 class FieldInspectorPanel;
 class LiveBitViewerWidget;
 
@@ -50,7 +58,9 @@ public:
         models::ByteTableModel& byteTableModel,
         ByteTableView& byteTableView,
         LiveBitViewerWidget& liveBitViewerWidget,
+        FrameFieldHintsPanel& frameFieldHintsPanel,
         FieldInspectorPanel& fieldInspectorPanel,
+        FieldCurrentValuePanel& fieldCurrentValuePanel,
         QLabel& selectionInfoLabel,
         QButtonGroup& liveBitViewerModeGroup,
         QSpinBox& liveBitViewerSizeSpinBox,
@@ -61,6 +71,8 @@ public:
     void scheduleLiveBitViewerRefresh();
     void refreshLiveBitViewer();
     void refreshFieldInspector();
+    void scheduleFrameFieldHintsRefresh();
+    void refreshFrameFieldHints();
     void updateSelectionStatus();
 
 private:
@@ -78,16 +90,26 @@ private:
     models::ByteTableModel& byteTableModel_;
     ByteTableView& byteTableView_;
     LiveBitViewerWidget& liveBitViewerWidget_;
+    FrameFieldHintsPanel& frameFieldHintsPanel_;
     FieldInspectorPanel& fieldInspectorPanel_;
+    FieldCurrentValuePanel& fieldCurrentValuePanel_;
     QLabel& selectionInfoLabel_;
     QButtonGroup& liveBitViewerModeGroup_;
     QSpinBox& liveBitViewerSizeSpinBox_;
     SelectionCallbacks selectionCallbacks_;
     QTimer* liveBitViewerRefreshTimer_ = nullptr;
     QTimer* fieldInspectorRefreshTimer_ = nullptr;
+    QTimer* frameFieldHintsRefreshTimer_ = nullptr;
     QFutureWatcher<features::inspector::FieldInspectorAnalysis>* fieldInspectorWatcher_ = nullptr;
+    QFutureWatcher<features::classification::FrameFieldClassificationResult>* frameFieldHintsWatcher_ = nullptr;
     quint64 fieldInspectorRequestId_ = 0;
     quint64 activeFieldInspectorRequestId_ = 0;
+    quint64 frameFieldHintsRequestId_ = 0;
+    quint64 activeFrameFieldHintsRequestId_ = 0;
+    QVector<features::classification::FrameFieldHint> classifiedCounterHints_;
+    QVector<features::classification::FrameFieldHint> classifiedConstantHints_;
+    QSet<int> classifiedCounterVisibleColumnIndices_;
+    QSet<int> classifiedConstantVisibleColumnIndices_;
 };
 
 }  // namespace bitabyte::ui

@@ -39,6 +39,7 @@ void MainWindow::addColumnDefinition() {
     if (inspectionController_ != nullptr) {
         inspectionController_->updateSelectionStatus();
         inspectionController_->refreshLiveBitViewer();
+        inspectionController_->scheduleFrameFieldHintsRefresh();
     }
     statusBar()->showMessage(QStringLiteral("Added column definition"), 3000);
 }
@@ -98,6 +99,7 @@ void MainWindow::defineColumnFromSelection() {
     if (inspectionController_ != nullptr) {
         inspectionController_->updateSelectionStatus();
         inspectionController_->refreshLiveBitViewer();
+        inspectionController_->scheduleFrameFieldHintsRefresh();
     }
     statusBar()->showMessage(
         !selectionCameFromSplit
@@ -126,6 +128,7 @@ void MainWindow::editColumnDefinition(int definitionIndex) {
     if (inspectionController_ != nullptr) {
         inspectionController_->updateSelectionStatus();
         inspectionController_->refreshLiveBitViewer();
+        inspectionController_->scheduleFrameFieldHintsRefresh();
     }
     statusBar()->showMessage(QStringLiteral("Updated column definition"), 3000);
 }
@@ -159,6 +162,7 @@ void MainWindow::removeColumnDefinition(int definitionIndex) {
     if (inspectionController_ != nullptr) {
         inspectionController_->updateSelectionStatus();
         inspectionController_->refreshLiveBitViewer();
+        inspectionController_->scheduleFrameFieldHintsRefresh();
     }
     statusBar()->showMessage(
         QStringLiteral("Removed column %1").arg(label.isEmpty() ? QStringLiteral("(unnamed)") : label),

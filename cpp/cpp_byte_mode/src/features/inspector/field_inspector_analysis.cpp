@@ -17,6 +17,11 @@
 namespace bitabyte::features::inspector {
 namespace {
 
+struct RowSpan {
+    qsizetype startBit = -1;
+    qsizetype lengthBits = 0;
+};
+
 QString formatBitsAsBinary(const QByteArray& bitValues) {
     QString binaryText;
     binaryText.reserve(bitValues.size());
@@ -207,8 +212,7 @@ double calculateEntropy(const QHash<QByteArray, int>& countsByValue, int sampleC
 
 QByteArray extractRowBits(
     const data::ByteDataSource& dataSource,
-    const features::framing::FrameLayout& frameLayout,
-    int row,
+    const RowSpan& rowSpan,
     const FieldSelection& fieldSelection
 ) {
     QByteArray rowBits;
@@ -217,13 +221,28 @@ QByteArray extractRowBits(
         return rowBits;
     }
 
-    const qsizetype rowLengthBits = frameLayout.rowLengthBits(dataSource, row);
-    if (fieldSelection.startBit < 0 || fieldSelection.endBit >= rowLengthBits) {
+    if (rowSpan.startBit < 0 || fieldSelection.startBit < 0 || fieldSelection.endBit >= rowSpan.lengthBits) {
         return rowBits;
     }
 
-    const qsizetype absoluteStartBit = frameLayout.rowStartBit(dataSource, row) + fieldSelection.startBit;
+    const qsizetype absoluteStartBit = rowSpan.startBit + fieldSelection.startBit;
     return dataSource.bitRange(absoluteStartBit, bitWidth);
+}
+
+QVector<RowSpan> buildRowSpans(
+    const data::ByteDataSource& dataSource,
+    const features::framing::FrameLayout& frameLayout,
+    int totalRowCount
+) {
+    QVector<RowSpan> rowSpans;
+    rowSpans.reserve(totalRowCount);
+    for (int row = 0; row < totalRowCount; ++row) {
+        RowSpan rowSpan;
+        rowSpan.startBit = frameLayout.rowStartBit(dataSource, row);
+        rowSpan.lengthBits = frameLayout.rowLengthBits(dataSource, row);
+        rowSpans.append(rowSpan);
+    }
+    return rowSpans;
 }
 
 QString formatBitRangeText(int startBit, int endBit) {
@@ -239,31 +258,13 @@ QString formatBitRangeText(int startBit, int endBit) {
     return QStringLiteral("bits %1-%2 | %3").arg(startBit).arg(endBit).arg(byteRangeText);
 }
 
-}  // namespace
-
-FieldInspectorAnalysis analyzeField(
-    const data::ByteDataSource& dataSource,
-    const features::framing::FrameLayout& frameLayout,
-    const FieldSelection& fieldSelection,
-    int currentRow
+void populateCurrentValueFields(
+    FieldInspectorAnalysis& analysis,
+    const QByteArray& currentRowBits,
+    int currentRow,
+    int bitWidth
 ) {
-    FieldInspectorAnalysis analysis;
-    const int bitWidth = fieldSelection.endBit - fieldSelection.startBit + 1;
-    if (!dataSource.hasData() || bitWidth <= 0) {
-        return analysis;
-    }
-
-    analysis.hasField = true;
-    analysis.fieldLabel = fieldSelection.label.trimmed().isEmpty() ? QStringLiteral("(unnamed field)") : fieldSelection.label.trimmed();
-    analysis.positionText = formatBitRangeText(fieldSelection.startBit, fieldSelection.endBit);
-    analysis.bitWidth = bitWidth;
-
-    const int totalRowCount = static_cast<int>(frameLayout.rowCount(dataSource));
-    const QByteArray currentRowBits = currentRow >= 0 && currentRow < totalRowCount
-        ? extractRowBits(dataSource, frameLayout, currentRow, fieldSelection)
-        : QByteArray();
     const QByteArray currentRowBytes = packBitsToBytes(currentRowBits);
-
     analysis.currentRowText = currentRowBits.isEmpty()
         ? QStringLiteral("-")
         : QStringLiteral("row %1").arg(currentRow);
@@ -285,8 +286,40 @@ FieldInspectorAnalysis analyzeField(
     );
     analysis.currentFloatBigEndianValue = formatFloatValue(currentRowBytes, false);
     analysis.currentFloatLittleEndianValue = formatFloatValue(currentRowBytes, true);
+}
+
+}  // namespace
+
+FieldInspectorAnalysis analyzeField(
+    const data::ByteDataSource& dataSource,
+    const features::framing::FrameLayout& frameLayout,
+    const FieldSelection& fieldSelection,
+    int currentRow,
+    bool analyzeAllRows
+) {
+    FieldInspectorAnalysis analysis;
+    const int bitWidth = fieldSelection.endBit - fieldSelection.startBit + 1;
+    if (!dataSource.hasData() || bitWidth <= 0) {
+        return analysis;
+    }
+
+    analysis.hasField = true;
+    analysis.fieldLabel = fieldSelection.label.trimmed().isEmpty() ? QStringLiteral("(unnamed field)") : fieldSelection.label.trimmed();
+    analysis.positionText = formatBitRangeText(fieldSelection.startBit, fieldSelection.endBit);
+    analysis.bitWidth = bitWidth;
+
+    const int totalRowCount = static_cast<int>(frameLayout.rowCount(dataSource));
+    const QVector<RowSpan> rowSpans = buildRowSpans(dataSource, frameLayout, totalRowCount);
+    const QByteArray currentRowBits = currentRow >= 0 && currentRow < totalRowCount
+        ? extractRowBits(dataSource, rowSpans.at(currentRow), fieldSelection)
+        : QByteArray();
+    populateCurrentValueFields(analysis, currentRowBits, currentRow, bitWidth);
+    if (!analyzeAllRows) {
+        return analysis;
+    }
 
     QHash<QByteArray, int> countsByValue;
+    countsByValue.reserve(totalRowCount);
     QList<quint64> numericValues;
     numericValues.reserve(totalRowCount);
 
@@ -300,7 +333,7 @@ FieldInspectorAnalysis analyzeField(
     int modeCount = 0;
 
     for (int row = 0; row < totalRowCount; ++row) {
-        const QByteArray rowBits = extractRowBits(dataSource, frameLayout, row, fieldSelection);
+        const QByteArray rowBits = extractRowBits(dataSource, rowSpans.at(row), fieldSelection);
         if (rowBits.isEmpty()) {
             ++analysis.missingFrameCount;
             continue;
@@ -364,6 +397,7 @@ FieldInspectorAnalysis analyzeField(
 
     struct HistogramEntry {
         QByteArray bits;
+        QString label;
         int count = 0;
     };
 
@@ -372,6 +406,7 @@ FieldInspectorAnalysis analyzeField(
     for (auto countIterator = countsByValue.cbegin(); countIterator != countsByValue.cend(); ++countIterator) {
         HistogramEntry histogramEntry;
         histogramEntry.bits = countIterator.key();
+        histogramEntry.label = formatBitsAsHexWithTrailingBits(histogramEntry.bits);
         histogramEntry.count = countIterator.value();
         histogramEntries.append(histogramEntry);
     }
@@ -383,7 +418,7 @@ FieldInspectorAnalysis analyzeField(
             if (leftEntry.count != rightEntry.count) {
                 return leftEntry.count > rightEntry.count;
             }
-            return formatBitsAsHexWithTrailingBits(leftEntry.bits) < formatBitsAsHexWithTrailingBits(rightEntry.bits);
+            return leftEntry.label < rightEntry.label;
         }
     );
 
@@ -392,7 +427,7 @@ FieldInspectorAnalysis analyzeField(
     analysis.histogramBins.reserve(histogramBinCount);
     for (int index = 0; index < histogramBinCount; ++index) {
         HistogramBin histogramBin;
-        histogramBin.label = formatBitsAsHexWithTrailingBits(histogramEntries.at(index).bits);
+        histogramBin.label = histogramEntries.at(index).label;
         histogramBin.count = histogramEntries.at(index).count;
         histogramBin.fraction = analysis.analyzedFrameCount > 0
             ? static_cast<double>(histogramBin.count) / static_cast<double>(analysis.analyzedFrameCount)

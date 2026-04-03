@@ -5,6 +5,8 @@
 #include "ui/byte_table_view.h"
 #include "ui/column_definitions_panel.h"
 #include "ui/frame_browser_controller.h"
+#include "ui/frame_field_hints_panel.h"
+#include "ui/field_current_value_panel.h"
 #include "ui/field_inspector_panel.h"
 #include "ui/frame_grouping_panel.h"
 #include "ui/framing_controller.h"
@@ -87,7 +89,9 @@ MainWindow::MainWindow(QWidget* parent)
         *byteTableModel_,
         *byteTableView_,
         *liveBitViewerWidget_,
+        *frameFieldHintsPanel_,
         *fieldInspectorPanel_,
+        *fieldCurrentValuePanel_,
         *selectionInfoLabel_,
         *liveBitViewerModeGroup_,
         *liveBitViewerSizeSpinBox_,
@@ -135,6 +139,16 @@ MainWindow::MainWindow(QWidget* parent)
     framingController_->syncControlsFromState();
     inspectionController_->refreshLiveBitViewer();
     inspectionController_->refreshFieldInspector();
+    inspectionController_->scheduleFrameFieldHintsRefresh();
+    connect(frameFieldHintsPanel_, &FrameFieldHintsPanel::bitRangeRequested, this, [this](int startBit, int endBit) {
+        selectVisibleColumns(visibleColumnsForAbsoluteBitRange(startBit, endBit));
+        byteTableView_->setFocus();
+        if (inspectionController_ != nullptr) {
+            inspectionController_->updateSelectionStatus();
+            inspectionController_->refreshLiveBitViewer();
+            inspectionController_->refreshFieldInspector();
+        }
+    });
     applyInitialWindowLayout();
     updateLoadedFileState();
 }
@@ -413,11 +427,19 @@ void MainWindow::buildColumnDefinitionsDock() {
     if (frameBrowserController_ != nullptr) {
         frameBrowserController_->setPanel(frameGroupingPanel_);
     }
+    QGroupBox* frameFieldHintsGroup = new QGroupBox(QStringLiteral("Find Frames Hints"), leftDockSplitter);
+    QVBoxLayout* frameFieldHintsLayout = new QVBoxLayout(frameFieldHintsGroup);
+    frameFieldHintsLayout->setContentsMargins(8, 8, 8, 8);
+    frameFieldHintsLayout->setSpacing(6);
+    frameFieldHintsPanel_ = new FrameFieldHintsPanel(frameFieldHintsGroup);
+    frameFieldHintsLayout->addWidget(frameFieldHintsPanel_);
     leftDockSplitter->addWidget(columnDefinitionsPanel_);
     leftDockSplitter->addWidget(frameGroupingPanel_);
+    leftDockSplitter->addWidget(frameFieldHintsGroup);
     leftDockSplitter->setStretchFactor(0, 3);
     leftDockSplitter->setStretchFactor(1, 2);
-    leftDockSplitter->setSizes({340, 260});
+    leftDockSplitter->setStretchFactor(2, 2);
+    leftDockSplitter->setSizes({300, 180, 180});
     columnDefinitionsDock_->setWidget(leftDockSplitter);
     addDockWidget(Qt::LeftDockWidgetArea, columnDefinitionsDock_);
 
@@ -554,29 +576,31 @@ void MainWindow::buildLiveBitViewerDock() {
     QScrollArea* liveViewerScrollArea = new QScrollArea(container);
     liveViewerScrollArea->setWidgetResizable(false);
     liveViewerScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    liveViewerScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    liveViewerScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     liveBitViewerWidget_ = new LiveBitViewerWidget(liveViewerScrollArea);
     liveViewerScrollArea->setWidget(liveBitViewerWidget_);
-    rootLayout->addWidget(liveViewerScrollArea, 1);
+    rootLayout->addWidget(liveViewerScrollArea, 2);
 
-    QGroupBox* fieldInspectorGroup = new QGroupBox(QStringLiteral("Field Inspector & Statistics"), container);
-    QVBoxLayout* fieldInspectorLayout = new QVBoxLayout(fieldInspectorGroup);
-    fieldInspectorLayout->setContentsMargins(8, 8, 8, 8);
-    fieldInspectorLayout->setSpacing(6);
+    QGroupBox* distributionGroup = new QGroupBox(QStringLiteral("Distribution"), container);
+    QVBoxLayout* distributionLayout = new QVBoxLayout(distributionGroup);
+    distributionLayout->setContentsMargins(8, 8, 8, 8);
+    distributionLayout->setSpacing(6);
+    fieldInspectorPanel_ = new FieldInspectorPanel(distributionGroup);
+    distributionLayout->addWidget(fieldInspectorPanel_);
+    rootLayout->addWidget(distributionGroup, 3);
 
-    QScrollArea* fieldInspectorScrollArea = new QScrollArea(fieldInspectorGroup);
-    fieldInspectorScrollArea->setWidgetResizable(true);
-    fieldInspectorScrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    fieldInspectorScrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    fieldInspectorPanel_ = new FieldInspectorPanel(fieldInspectorScrollArea);
-    fieldInspectorScrollArea->setWidget(fieldInspectorPanel_);
-    fieldInspectorLayout->addWidget(fieldInspectorScrollArea);
-    rootLayout->addWidget(fieldInspectorGroup, 1);
+    QGroupBox* currentValueGroup = new QGroupBox(QStringLiteral("Current Value"), container);
+    QVBoxLayout* currentValueLayout = new QVBoxLayout(currentValueGroup);
+    currentValueLayout->setContentsMargins(8, 8, 8, 8);
+    currentValueLayout->setSpacing(6);
+    fieldCurrentValuePanel_ = new FieldCurrentValuePanel(currentValueGroup);
+    currentValueLayout->addWidget(fieldCurrentValuePanel_);
+    rootLayout->addWidget(currentValueGroup);
 
     liveBitViewerDock_->setWidget(container);
     addDockWidget(Qt::RightDockWidgetArea, liveBitViewerDock_);
     liveBitViewerDock_->setMinimumWidth(detail::kMinimumLiveBitViewerDockWidth);
-    liveBitViewerDock_->setMinimumHeight(520);
+    liveBitViewerDock_->setMinimumHeight(360);
 
     connect(
         liveBitViewerModeGroup_,
@@ -643,6 +667,9 @@ void MainWindow::updateLoadedFileState() {
     refreshColumnDefinitionsPanel();
     if (frameBrowserController_ != nullptr) {
         frameBrowserController_->refreshPanel();
+    }
+    if (inspectionController_ != nullptr) {
+        inspectionController_->scheduleFrameFieldHintsRefresh();
     }
 
     const bool hasData = dataSource_.hasData();
