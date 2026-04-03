@@ -11,14 +11,14 @@ Bitabyte is focused on reverse-engineering and inspecting binary data with a wor
 - sync and frame candidate discovery
 - field definition and split views
 - grouped frame navigation and filtering
-- field inspection and live bit preview
+- field inspection, current value decoding, and live bit preview
 - CSV export
 
 ## Main UI Areas
 
 - center table view for raw bytes or framed rows
 - left dock for column definitions and frame grouping
-- right dock for the live bit viewer and field inspector
+- right dock for the live bit viewer, distribution, and current value panels
 
 ## Current Capabilities
 
@@ -26,11 +26,13 @@ Bitabyte is focused on reverse-engineering and inspecting binary data with a wor
 - change bytes per row
 - apply framing from a typed sync pattern
 - frame from a selected table region
-- run `Find Frames...` to discover likely framing candidates
+- run `Find Frames...` to discover, preview, and apply likely framing candidates
+- inspect detected constant and counter-like fields from framed data
 - define columns from bit selections
 - split fields into binary or nibble views
 - group/filter framed rows by field values
 - inspect selected values in multiple decoded formats
+- use distribution analysis after framing is active
 - highlight constant columns
 - export the visible table to CSV
 
@@ -77,6 +79,6 @@ $env:PATH = "C:\Qt\6.11.0\mingw_64\bin;C:\Qt\Tools\mingw1310_64\bin;$env:PATH"
 
 ## Related Docs
 
-- [docs/ARCHITECTURE.md](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode/docs/ARCHITECTURE.md)
-- [docs/STYLE.md](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode/docs/STYLE.md)
-- [docs/ROADMAP.md](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode/docs/ROADMAP.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/STYLE.md](docs/STYLE.md)
+- [docs/ROADMAP.md](docs/ROADMAP.md)

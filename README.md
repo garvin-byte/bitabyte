@@ -2,18 +2,19 @@
 
 Bitabyte is a desktop tool for exploring binary files, defining fields, discovering frame boundaries, and inspecting structured data at bit and byte level.
 
-The active application is the C++/Qt version in [cpp/cpp_byte_mode](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode).
+The active application is the C++/Qt version in [cpp/cpp_byte_mode](cpp/cpp_byte_mode).
 
 ## Current Features
 
-- open files, reload files, and drag-and-drop data into the app
-- byte-table browsing with configurable bytes-per-row
-- bit-accurate sync framing from a typed pattern or table selection
-- `Find Frames...` candidate discovery with ranked framing results
-- column definitions and split views for bytes, nibbles, and individual bits
-- frame grouping and branch filtering in the left dock
-- live bit viewer and field inspector
-- constant-column highlighting and CSV export
+- open, reload, and drag-drop binary files into the app
+- browse raw bytes with configurable bytes-per-row
+- apply bit-accurate framing from a typed sync pattern or a table selection
+- run `Find Frames...` to rank candidate frame layouts and preview them before applying
+- inspect detected constant and counter-like fields after framing
+- define columns and split views for bytes, nibbles, and individual bits
+- group and filter framed rows from the left dock
+- inspect selected values in the live bit viewer, current value panel, and framed distribution view
+- highlight constant columns and export the visible table to CSV
 
 ## Build
 
@@ -46,7 +47,7 @@ Run:
 
 ## Docs
 
-- [cpp/cpp_byte_mode/README.md](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode/README.md)
-- [cpp/cpp_byte_mode/docs/ARCHITECTURE.md](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode/docs/ARCHITECTURE.md)
-- [cpp/cpp_byte_mode/docs/ROADMAP.md](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode/docs/ROADMAP.md)
-- [cpp/cpp_byte_mode/docs/STYLE.md](c:/Users/thoma/PycharmProjects/bitabyte/cpp/cpp_byte_mode/docs/STYLE.md)
+- [cpp/cpp_byte_mode/README.md](cpp/cpp_byte_mode/README.md)
+- [cpp/cpp_byte_mode/docs/ARCHITECTURE.md](cpp/cpp_byte_mode/docs/ARCHITECTURE.md)
+- [cpp/cpp_byte_mode/docs/ROADMAP.md](cpp/cpp_byte_mode/docs/ROADMAP.md)
+- [cpp/cpp_byte_mode/docs/STYLE.md](cpp/cpp_byte_mode/docs/STYLE.md)
