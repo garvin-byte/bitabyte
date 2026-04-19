@@ -6,9 +6,10 @@ This is the main Bitabyte application.
 
 Bitabyte is focused on reverse-engineering and inspecting binary data with a workflow built around:
 
-- raw byte browsing
+- raw byte and bit browsing
 - bit-accurate framing
 - sync and frame candidate discovery
+- direct pattern search and repeated-pattern discovery
 - field definition and split views
 - grouped frame navigation and filtering
 - field inspection, current value decoding, and live bit preview
@@ -23,10 +24,14 @@ Bitabyte is focused on reverse-engineering and inspecting binary data with a wor
 ## Current Capabilities
 
 - open, reload, and drag-drop files
-- change bytes per row
+- switch between byte mode and bit mode
+- change visible size plus raw/fixed frame width and bit offset
 - apply framing from a typed sync pattern
+- apply framing from a discovered search pattern
 - frame from a selected table region
-- run `Find Frames...` to discover, preview, and apply likely framing candidates
+- run `Find Framing...` to discover, preview, and apply likely framing candidates
+- run `Find Pattern...` to search for hex or bit patterns and highlight every match
+- use the `Find Patterns` pane to rank repeated patterns by a selected bit or byte size
 - inspect detected constant and counter-like fields from framed data
 - define columns from bit selections
 - split fields into binary or nibble views

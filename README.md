@@ -7,9 +7,12 @@ The active application is the C++/Qt version in [cpp/cpp_byte_mode](cpp/cpp_byte
 ## Current Features
 
 - open, reload, and drag-drop binary files into the app
-- browse raw bytes with configurable bytes-per-row
-- apply bit-accurate framing from a typed sync pattern or a table selection
-- run `Find Frames...` to rank candidate frame layouts and preview them before applying
+- switch between byte mode and bit mode in the same table view
+- browse raw data with configurable frame width, bit offset, and display size
+- apply bit-accurate framing from a typed sync pattern, a discovered pattern, or a table selection
+- run `Find Framing...` to rank candidate frame layouts and preview them before applying
+- run `Find Pattern...` to search hex or bit patterns, highlight matches, and frame directly from a pattern
+- use the `Find Patterns` pane inside `Find Pattern...` to rank repeated patterns by a chosen bit or byte size
 - inspect detected constant and counter-like fields after framing
 - define columns and split views for bytes, nibbles, and individual bits
 - group and filter framed rows from the left dock
