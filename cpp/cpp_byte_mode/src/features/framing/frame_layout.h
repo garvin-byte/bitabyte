@@ -23,12 +23,18 @@ public:
 
     [[nodiscard]] bool isFramed() const;
     [[nodiscard]] int frameMaxLengthBytes() const;
+    [[nodiscard]] qsizetype frameMaxLengthBits() const;
     [[nodiscard]] RowOrderMode rowOrderMode() const;
     [[nodiscard]] bool rowOrderDescending() const;
+    [[nodiscard]] qsizetype rawRowWidthBits() const;
+    [[nodiscard]] qsizetype rawStartBitOffset() const;
+    [[nodiscard]] bool padFramedBitDisplayToByteBoundary() const;
 
     void setFrames(const QVector<FrameSpan>& frameSpans);
     void clearFrame();
     void setRowOrder(RowOrderMode rowOrderMode, bool descending);
+    void setRawLayout(qsizetype rowWidthBits, qsizetype startBitOffset = 0);
+    void setPadFramedBitDisplayToByteBoundary(bool enabled);
 
     [[nodiscard]] bool isValidForDataSource(const data::ByteDataSource& dataSource) const;
     [[nodiscard]] qsizetype rowCount(const data::ByteDataSource& dataSource) const;
@@ -48,6 +54,10 @@ private:
     QVector<FrameSpan> frameSpans_;
     QVector<int> displayRowOrder_;
     int frameMaxLengthBytes_ = 0;
+    qsizetype frameMaxLengthBits_ = 0;
+    qsizetype rawRowWidthBits_ = 128;
+    qsizetype rawStartBitOffset_ = 0;
+    bool padFramedBitDisplayToByteBoundary_ = false;
     RowOrderMode rowOrderMode_ = RowOrderMode::Chronological;
     bool rowOrderDescending_ = false;
 };

@@ -54,7 +54,7 @@ void BitstreamSyncDiscoveryWorker::cancel() {
 
 void BitstreamSyncDiscoveryWorker::start() {
     if (dataSource_ == nullptr || !dataSource_->hasData()) {
-        emit failed(QStringLiteral("Load a file before running Find Frames."));
+        emit failed(QStringLiteral("Load a file before running Find Framing."));
         return;
     }
 

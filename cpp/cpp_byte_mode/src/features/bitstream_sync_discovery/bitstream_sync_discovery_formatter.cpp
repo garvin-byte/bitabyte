@@ -9,6 +9,10 @@ namespace {
 
 using namespace detail;
 
+constexpr QLatin1String kDisplayFormatHexAndBits{"hex+bits"};
+constexpr QLatin1String kDisplayFormatHex{"hex"};
+constexpr QLatin1String kDisplayFormatBinary{"binary"};
+
 [[nodiscard]] QString formatHexPrefixPattern(PatternValue bitValue, int bitWidth) {
     if (bitWidth <= 0) {
         return {};
@@ -62,22 +66,20 @@ void formatCandidateForDisplay(BitstreamSyncDiscoveryCandidate* candidate) {
     if (!candidate->displayHexPattern.isEmpty() && !candidate->trailingBitsText.isEmpty()) {
         candidate->displayPattern =
             QStringLiteral("%1 %2").arg(candidate->displayHexPattern, candidate->trailingBitsText);
-        candidate->displayFormat = QStringLiteral("hex+bits");
+        candidate->displayFormat = kDisplayFormatHexAndBits;
     } else if (!candidate->displayHexPattern.isEmpty()) {
         candidate->displayPattern = candidate->displayHexPattern;
-        candidate->displayFormat = QStringLiteral("hex");
+        candidate->displayFormat = kDisplayFormatHex;
     } else {
         candidate->displayPattern = candidate->trailingBitsText;
-        candidate->displayFormat = QStringLiteral("binary");
+        candidate->displayFormat = kDisplayFormatBinary;
     }
 }
 
 BitstreamSyncDiscoveryCandidateList formatCandidatesForDisplay(const BitstreamSyncDiscoveryCandidateList& candidates) {
-    BitstreamSyncDiscoveryCandidateList formattedCandidates;
-    formattedCandidates.reserve(candidates.size());
-    for (BitstreamSyncDiscoveryCandidate candidate : candidates) {
+    BitstreamSyncDiscoveryCandidateList formattedCandidates = candidates;
+    for (BitstreamSyncDiscoveryCandidate& candidate : formattedCandidates) {
         formatCandidateForDisplay(&candidate);
-        formattedCandidates.append(std::move(candidate));
     }
     return formattedCandidates;
 }

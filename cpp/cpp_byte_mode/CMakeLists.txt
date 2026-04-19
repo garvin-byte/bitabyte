@@ -69,6 +69,8 @@ set(BITABYTE_CPP_BYTE_MODE_FILES
     src/ui/inspection_controller.cpp
     src/ui/bitstream_sync_discovery_dialog.h
     src/ui/bitstream_sync_discovery_dialog.cpp
+    src/ui/pattern_search_dialog.h
+    src/ui/pattern_search_dialog.cpp
     src/ui/live_bit_viewer_widget.h
     src/ui/live_bit_viewer_widget.cpp
     src/ui/main_window.h

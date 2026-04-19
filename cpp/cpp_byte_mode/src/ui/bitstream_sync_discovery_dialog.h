@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "features/classification/frame_field_classification.h"
+#include "features/columns/byte_column_definition.h"
 #include "features/bitstream_sync_discovery/bitstream_sync_discovery_types.h"
 
 class QLabel;
@@ -49,10 +50,15 @@ class BitstreamSyncDiscoveryDialog final : public QDialog {
     Q_OBJECT
 
 public:
-    explicit BitstreamSyncDiscoveryDialog(data::ByteDataSource* dataSource, QWidget* parent = nullptr);
+    explicit BitstreamSyncDiscoveryDialog(
+        data::ByteDataSource* dataSource,
+        const QVector<features::columns::ByteColumnDefinition>* existingColumnDefinitions = nullptr,
+        QWidget* parent = nullptr
+    );
     ~BitstreamSyncDiscoveryDialog() override;
 
     [[nodiscard]] std::optional<features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidate> selectedCandidate() const;
+    [[nodiscard]] QVector<features::classification::FrameFieldHint> selectedColumnHints() const;
 
 private slots:
     void startDiscovery();
@@ -111,6 +117,7 @@ private:
     ) const;
 
     data::ByteDataSource* dataSource_ = nullptr;
+    const QVector<features::columns::ByteColumnDefinition>* existingColumnDefinitions_ = nullptr;
     features::framing::FrameLayout* previewFrameLayout_ = nullptr;
     LiveBitViewerWidget* previewBitViewer_ = nullptr;
     FrameFieldHintsPanel* previewHintsPanel_ = nullptr;

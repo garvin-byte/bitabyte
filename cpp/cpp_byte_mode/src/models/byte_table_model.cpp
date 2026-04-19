@@ -97,6 +97,27 @@ QByteArray rowBitsForSnapshotVisibleColumn(
 
 const QColor kConstantHighlightColor(255, 247, 196);
 const QColor kCounterHighlightColor(212, 232, 255);
+const QColor kPatternHighlightColor(220, 245, 255);
+
+bool rangesOverlap(
+    qsizetype startBit,
+    qsizetype endBit,
+    const QVector<QPair<qsizetype, qsizetype>>& ranges
+) {
+    if (ranges.isEmpty() || endBit < startBit) {
+        return false;
+    }
+
+    const auto candidate = std::lower_bound(
+        ranges.begin(),
+        ranges.end(),
+        startBit,
+        [](const QPair<qsizetype, qsizetype>& range, qsizetype value) {
+            return range.second < value;
+        }
+    );
+    return candidate != ranges.end() && candidate->first <= endBit;
+}
 
 bool byteColumnDefinitionsEqual(
     const QVector<features::columns::ByteColumnDefinition>& leftDefinitions,
@@ -138,14 +159,20 @@ QVector<int> constantVisibleColumnIndicesForSnapshot(
     if (totalRowCount <= 0) {
         return constantVisibleColumnIndices;
     }
-    QVector<qsizetype> rowStartBits;
-    QVector<qsizetype> rowLengthBits;
-    rowStartBits.reserve(totalRowCount);
-    rowLengthBits.reserve(totalRowCount);
+
+    struct RowGeometry {
+        qsizetype startBit;
+        qsizetype lengthBits;
+    };
+    QVector<RowGeometry> rowGeometries;
+    rowGeometries.reserve(totalRowCount);
     for (int row = 0; row < totalRowCount; ++row) {
-        rowStartBits.append(frameLayout.rowStartBit(dataSource, row));
-        rowLengthBits.append(frameLayout.rowLengthBits(dataSource, row));
+        rowGeometries.append({
+            frameLayout.rowStartBit(dataSource, row),
+            frameLayout.rowLengthBits(dataSource, row),
+        });
     }
+
     constantVisibleColumnIndices.reserve(visibleColumns.size());
     for (int visibleColumnIndex = 0; visibleColumnIndex < visibleColumns.size(); ++visibleColumnIndex) {
         const features::columns::VisibleByteColumn& visibleColumn = visibleColumns.at(visibleColumnIndex);
@@ -161,8 +188,8 @@ QVector<int> constantVisibleColumnIndicesForSnapshot(
         for (int row = 0; row < totalRowCount; ++row) {
             const QByteArray rowBits = rowBitsForSnapshotVisibleColumn(
                 dataSource,
-                rowStartBits.at(row),
-                rowLengthBits.at(row),
+                rowGeometries.at(row).startBit,
+                rowGeometries.at(row).lengthBits,
                 visibleColumn
             );
             if (rowBits.isEmpty()) {
@@ -233,6 +260,7 @@ ByteTableModel::ByteTableModel(
         QStringLiteral("Monospace"),
     });
     monospaceFont_.setStyleHint(QFont::StyleHint::Monospace);
+    monospaceFont_.setHintingPreference(QFont::HintingPreference::PreferFullHinting);
     rebuildVisibleColumns();
 }
 
@@ -309,7 +337,16 @@ QVariant ByteTableModel::data(const QModelIndex& modelIndex, int role) const {
         if (!hasDisplayValue(modelIndex.row(), visibleColumn)) {
             return QBrush(QColor(242, 242, 242));
         }
-        const QColor backgroundColor = backgroundForVisibleColumn(visibleColumnIndex, visibleColumn);
+        QColor backgroundColor = backgroundForVisibleColumn(visibleColumnIndex, visibleColumn);
+        const qsizetype cellStartBit = rowStartBit(modelIndex.row()) + visibleColumn.absoluteStartBit;
+        const qsizetype cellEndBit = rowStartBit(modelIndex.row()) + visibleColumn.absoluteEndBit;
+        if (rangesOverlap(cellStartBit, cellEndBit, patternHighlightRanges_)) {
+            backgroundColor = blendHighlightColor(
+                backgroundColor,
+                kPatternHighlightColor,
+                backgroundColor.isValid() ? 0.65 : 1.0
+            );
+        }
         if (backgroundColor.isValid()) {
             return QBrush(backgroundColor);
         }
@@ -404,6 +441,10 @@ bool ByteTableModel::hasSplit(int byteIndex) const {
 }
 
 bool ByteTableModel::canSplitByte(int byteIndex) const {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     if (byteIndex < 0 || byteIndex >= displayWidthBytes()) {
         return false;
     }
@@ -431,6 +472,10 @@ bool ByteTableModel::canSplitByte(int byteIndex) const {
 }
 
 bool ByteTableModel::applySplit(const QSet<int>& byteIndices, const QString& splitType) {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     const QString normalizedSplitType = splitType.trimmed().toLower();
     if (byteIndices.isEmpty()
         || (normalizedSplitType != QStringLiteral("binary") && normalizedSplitType != QStringLiteral("nibble"))) {
@@ -469,6 +514,10 @@ bool ByteTableModel::applySplit(const QSet<int>& byteIndices, const QString& spl
 }
 
 bool ByteTableModel::clearSplits(const QSet<int>& byteIndices) {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     if (byteIndices.isEmpty()) {
         return false;
     }
@@ -486,6 +535,10 @@ bool ByteTableModel::clearSplits(const QSet<int>& byteIndices) {
 }
 
 bool ByteTableModel::removeSplitBitRange(int startBit, int endBit) {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     if (startBit > endBit) {
         return false;
     }
@@ -631,6 +684,26 @@ QString ByteTableModel::topHeaderLabelForVisibleColumn(int visibleColumn) const 
     }
 
     const features::columns::VisibleByteColumn& visibleColumnEntry = visibleColumns_.at(visibleColumn);
+    if (isBitDisplayMode()) {
+        if (visibleColumnEntry.definitionIndex >= 0) {
+            const features::columns::ByteColumnDefinition* columnDefinition =
+                definitionAtIndex(visibleColumnEntry.definitionIndex);
+            if (columnDefinition != nullptr) {
+                const QString labelText = columnDefinition->label.trimmed();
+                if (!labelText.isEmpty()) {
+                    return labelText;
+                }
+            }
+        }
+
+        const QString splitLabel = visibleColumnEntry.splitLabel.trimmed();
+        if (!splitLabel.isEmpty()) {
+            return splitLabel;
+        }
+
+        return formatRangeLabel(visibleColumnEntry.byteIndex, visibleColumnEntry.byteEndIndex);
+    }
+
     if (visibleColumnEntry.definitionIndex >= 0) {
         const features::columns::ByteColumnDefinition* columnDefinition = definitionAtIndex(visibleColumnEntry.definitionIndex);
         if (columnDefinition != nullptr) {
@@ -648,6 +721,9 @@ QString ByteTableModel::bottomHeaderLabelForVisibleColumn(int visibleColumn) con
     }
 
     const features::columns::VisibleByteColumn& visibleColumnEntry = visibleColumns_.at(visibleColumn);
+    if (isBitDisplayMode()) {
+        return QString::number(visibleColumnEntry.bitStart);
+    }
     return formatRangeLabel(visibleColumnEntry.byteIndex, visibleColumnEntry.byteEndIndex);
 }
 
@@ -670,6 +746,10 @@ QSet<int> ByteTableModel::splitByteTargetsForVisibleColumns(const QSet<int>& vis
 }
 
 bool ByteTableModel::selectionCanBecomeNibble(const QSet<int>& visibleColumns) const {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     const std::optional<SingleByteSelection> selection = singleByteSelection(visibleColumns);
     if (!selection.has_value() || selection->bitWidth != 4 || !splitColumns_.contains(selection->byteIndex)) {
         return false;
@@ -689,6 +769,10 @@ bool ByteTableModel::selectionCanBecomeNibble(const QSet<int>& visibleColumns) c
 }
 
 bool ByteTableModel::selectionCanBecomeBinary(const QSet<int>& visibleColumns) const {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     const std::optional<SingleByteSelection> selection = singleByteSelection(visibleColumns);
     if (!selection.has_value() || selection->bitWidth != 4 || !splitColumns_.contains(selection->byteIndex)) {
         return false;
@@ -708,6 +792,10 @@ bool ByteTableModel::selectionCanBecomeBinary(const QSet<int>& visibleColumns) c
 }
 
 bool ByteTableModel::convertSelectionToNibble(const QSet<int>& visibleColumns) {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     const std::optional<SingleByteSelection> selection = singleByteSelection(visibleColumns);
     if (!selection.has_value() || selection->bitWidth != 4) {
         return false;
@@ -783,6 +871,10 @@ bool ByteTableModel::convertSelectionToNibble(const QSet<int>& visibleColumns) {
 }
 
 bool ByteTableModel::convertSelectionToBinary(const QSet<int>& visibleColumns) {
+    if (isBitDisplayMode()) {
+        return false;
+    }
+
     const std::optional<SingleByteSelection> selection = singleByteSelection(visibleColumns);
     if (!selection.has_value() || selection->bitWidth != 4) {
         return false;
@@ -872,6 +964,22 @@ QHash<int, SplitColumnState> ByteTableModel::splitColumns() const {
     return splitColumns_;
 }
 
+ByteTableModel::DisplayMode ByteTableModel::displayMode() const {
+    return displayMode_;
+}
+
+bool ByteTableModel::isBitDisplayMode() const {
+    return displayMode_ == DisplayMode::Bit;
+}
+
+ByteTableModel::BitCellDisplayMode ByteTableModel::bitCellDisplayMode() const {
+    return bitCellDisplayMode_;
+}
+
+QFont ByteTableModel::contentFont() const {
+    return monospaceFont_;
+}
+
 void ByteTableModel::setConstantColumnHighlightEnabled(bool highlightEnabled) {
     if (constantColumnHighlightEnabled_ == highlightEnabled) {
         return;
@@ -929,6 +1037,98 @@ void ByteTableModel::setSplitColumns(const QHash<int, SplitColumnState>& splitCo
     splitColumns_ = splitColumns;
     rebuildVisibleColumns();
     endResetModel();
+}
+
+void ByteTableModel::setDisplayMode(DisplayMode displayMode) {
+    if (displayMode_ == displayMode) {
+        return;
+    }
+
+    beginResetModel();
+    displayMode_ = displayMode;
+    rebuildVisibleColumns();
+    endResetModel();
+}
+
+void ByteTableModel::setBitCellDisplayMode(BitCellDisplayMode bitCellDisplayMode) {
+    if (bitCellDisplayMode_ == bitCellDisplayMode) {
+        return;
+    }
+
+    bitCellDisplayMode_ = bitCellDisplayMode;
+    if (!isBitDisplayMode() || rowCount() <= 0 || columnCount() <= 0) {
+        return;
+    }
+
+    emit dataChanged(index(0, 0), index(rowCount() - 1, columnCount() - 1));
+}
+
+void ByteTableModel::setContentFontPixelSize(int pixelSize) {
+    const int normalizedPixelSize = qMax(1, pixelSize);
+    if (monospaceFont_.pixelSize() == normalizedPixelSize) {
+        return;
+    }
+
+    monospaceFont_.setPixelSize(normalizedPixelSize);
+    if (rowCount() <= 0 || columnCount() <= 0) {
+        return;
+    }
+
+    emit dataChanged(
+        index(0, 0),
+        index(rowCount() - 1, columnCount() - 1),
+        {Qt::FontRole}
+    );
+}
+
+void ByteTableModel::setPatternHighlightRanges(
+    const QVector<QPair<qsizetype, qsizetype>>& patternHighlightRanges
+) {
+    QVector<QPair<qsizetype, qsizetype>> normalizedRanges;
+    normalizedRanges.reserve(patternHighlightRanges.size());
+    for (const QPair<qsizetype, qsizetype>& patternHighlightRange : patternHighlightRanges) {
+        if (patternHighlightRange.second < patternHighlightRange.first) {
+            continue;
+        }
+        normalizedRanges.append(patternHighlightRange);
+    }
+
+    std::sort(
+        normalizedRanges.begin(),
+        normalizedRanges.end(),
+        [](const QPair<qsizetype, qsizetype>& leftRange, const QPair<qsizetype, qsizetype>& rightRange) {
+            if (leftRange.first != rightRange.first) {
+                return leftRange.first < rightRange.first;
+            }
+            return leftRange.second < rightRange.second;
+        }
+    );
+
+    QVector<QPair<qsizetype, qsizetype>> mergedRanges;
+    mergedRanges.reserve(normalizedRanges.size());
+    for (const QPair<qsizetype, qsizetype>& normalizedRange : normalizedRanges) {
+        if (mergedRanges.isEmpty() || normalizedRange.first > (mergedRanges.last().second + 1)) {
+            mergedRanges.append(normalizedRange);
+            continue;
+        }
+
+        mergedRanges.last().second = qMax(mergedRanges.last().second, normalizedRange.second);
+    }
+
+    if (patternHighlightRanges_ == mergedRanges) {
+        return;
+    }
+
+    patternHighlightRanges_ = mergedRanges;
+    if (rowCount() <= 0 || columnCount() <= 0) {
+        return;
+    }
+
+    emit dataChanged(
+        index(0, 0),
+        index(rowCount() - 1, columnCount() - 1),
+        {Qt::BackgroundRole}
+    );
 }
 
 void ByteTableModel::reload() {
@@ -1033,6 +1233,14 @@ QString ByteTableModel::formatVisibleColumnDisplayText(
         return {};
     }
 
+    if (isBitDisplayMode()) {
+        const QByteArray rowBits = rowBitsForVisibleColumn(row, visibleColumn);
+        if (rowBits.isEmpty()) {
+            return {};
+        }
+        return rowBits.at(0) != 0 ? QStringLiteral("1") : QStringLiteral("0");
+    }
+
     if (visibleColumn.definitionIndex >= 0) {
         const features::columns::ByteColumnDefinition* columnDefinition = definitionAtIndex(visibleColumn.definitionIndex);
         if (columnDefinition == nullptr) {
@@ -1086,6 +1294,9 @@ QColor ByteTableModel::backgroundForVisibleColumn(
     QColor backgroundColor;
     if (columnDefinition != nullptr) {
         backgroundColor = features::columns::colorForName(columnDefinition->colorName);
+    } else if (!visibleColumn.splitColorName.trimmed().isEmpty()
+        && visibleColumn.splitColorName.trimmed() != QStringLiteral("None")) {
+        backgroundColor = features::columns::colorForName(visibleColumn.splitColorName.trimmed());
     }
 
     if (constantColumnHighlightEnabled_
@@ -1349,6 +1560,79 @@ void ByteTableModel::rebuildVisibleColumns() {
     }
     for (const features::columns::ByteColumnDefinition& detectedFieldDefinition : detectedFieldDefinitions_) {
         effectiveColumnDefinitions_.append(detectedFieldDefinition);
+    }
+
+    if (isBitDisplayMode()) {
+        const int totalBitCount = frameLayout_->isFramed()
+            ? (
+                frameLayout_->padFramedBitDisplayToByteBoundary()
+                    ? widthBytes * 8
+                    : static_cast<int>(qMax<qsizetype>(0, frameLayout_->frameMaxLengthBits()))
+            )
+            : static_cast<int>(qMax<qsizetype>(0, frameLayout_->rawRowWidthBits()));
+        QVector<int> definitionIndexByBit(totalBitCount, -1);
+        QVector<QString> splitLabelByBit(totalBitCount);
+        QVector<QString> splitColorByBit(totalBitCount);
+        QVector<QString> splitDisplayFormatByBit(totalBitCount);
+
+        for (int definitionIndex = 0; definitionIndex < effectiveColumnDefinitions_.size(); ++definitionIndex) {
+            const std::optional<QPair<int, int>> bitSpan =
+                definitionBitSpan(effectiveColumnDefinitions_.at(definitionIndex));
+            if (!bitSpan.has_value()) {
+                continue;
+            }
+
+            for (int absoluteBit = bitSpan->first; absoluteBit <= bitSpan->second; ++absoluteBit) {
+                if (absoluteBit < 0 || absoluteBit >= totalBitCount) {
+                    continue;
+                }
+                if (definitionIndexByBit[absoluteBit] < 0) {
+                    definitionIndexByBit[absoluteBit] = definitionIndex;
+                }
+            }
+        }
+
+        for (int byteIndex = 0; byteIndex < widthBytes; ++byteIndex) {
+            const QVector<SplitSegment> splitSegments = splitSegmentsForByte(byteIndex);
+            for (const SplitSegment& splitSegment : splitSegments) {
+                for (int bitIndex = splitSegment.startBit; bitIndex <= splitSegment.endBit; ++bitIndex) {
+                    const int absoluteBit = (byteIndex * 8) + bitIndex;
+                    if (absoluteBit < 0 || absoluteBit >= totalBitCount || definitionIndexByBit[absoluteBit] >= 0) {
+                        continue;
+                    }
+
+                    splitLabelByBit[absoluteBit] = splitSegment.label.trimmed();
+                    splitColorByBit[absoluteBit] = splitSegment.colorName.trimmed();
+                    splitDisplayFormatByBit[absoluteBit] = normalizedDisplayFormat(splitSegment.displayFormat);
+                }
+            }
+        }
+
+        visibleColumns_.reserve(totalBitCount);
+        for (int absoluteBit = 0; absoluteBit < totalBitCount; ++absoluteBit) {
+            features::columns::VisibleByteColumn visibleColumn;
+            visibleColumn.byteIndex = absoluteBit / 8;
+            visibleColumn.byteEndIndex = visibleColumn.byteIndex;
+            visibleColumn.bitStart = absoluteBit % 8;
+            visibleColumn.bitEnd = visibleColumn.bitStart;
+            visibleColumn.absoluteStartBit = absoluteBit;
+            visibleColumn.absoluteEndBit = absoluteBit;
+            visibleColumn.definitionIndex = definitionIndexByBit.at(absoluteBit);
+            visibleColumn.splitLabel = splitLabelByBit.at(absoluteBit);
+            visibleColumn.splitColorName = splitColorByBit.at(absoluteBit).isEmpty()
+                ? QStringLiteral("None")
+                : splitColorByBit.at(absoluteBit);
+            visibleColumn.splitDisplayFormat = splitDisplayFormatByBit.at(absoluteBit).isEmpty()
+                ? QStringLiteral("binary")
+                : splitDisplayFormatByBit.at(absoluteBit);
+            visibleColumns_.append(visibleColumn);
+        }
+
+        rebuildByteColumnIndexMap();
+        if (constantColumnHighlightEnabled_) {
+            scheduleConstantVisibleColumnCacheRebuild();
+        }
+        return;
     }
 
     QVector<DefinitionSpanInfo> definitionSpans;

@@ -16,12 +16,28 @@ int FrameLayout::frameMaxLengthBytes() const {
     return frameMaxLengthBytes_;
 }
 
+qsizetype FrameLayout::frameMaxLengthBits() const {
+    return frameMaxLengthBits_;
+}
+
 FrameLayout::RowOrderMode FrameLayout::rowOrderMode() const {
     return rowOrderMode_;
 }
 
 bool FrameLayout::rowOrderDescending() const {
     return rowOrderDescending_;
+}
+
+qsizetype FrameLayout::rawRowWidthBits() const {
+    return rawRowWidthBits_;
+}
+
+qsizetype FrameLayout::rawStartBitOffset() const {
+    return rawStartBitOffset_;
+}
+
+bool FrameLayout::padFramedBitDisplayToByteBoundary() const {
+    return padFramedBitDisplayToByteBoundary_;
 }
 
 void FrameLayout::setFrames(const QVector<FrameSpan>& frameSpans) {
@@ -36,6 +52,8 @@ void FrameLayout::clearFrame() {
     frameSpans_.clear();
     displayRowOrder_.clear();
     frameMaxLengthBytes_ = 0;
+    frameMaxLengthBits_ = 0;
+    padFramedBitDisplayToByteBoundary_ = false;
 }
 
 void FrameLayout::setRowOrder(RowOrderMode rowOrderMode, bool descending) {
@@ -44,9 +62,20 @@ void FrameLayout::setRowOrder(RowOrderMode rowOrderMode, bool descending) {
     rebuildDisplayOrder();
 }
 
+void FrameLayout::setRawLayout(qsizetype rowWidthBits, qsizetype startBitOffset) {
+    rawRowWidthBits_ = qMax<qsizetype>(1, rowWidthBits);
+    rawStartBitOffset_ = qMax<qsizetype>(0, startBitOffset);
+}
+
+void FrameLayout::setPadFramedBitDisplayToByteBoundary(bool enabled) {
+    padFramedBitDisplayToByteBoundary_ = enabled;
+}
+
 bool FrameLayout::isValidForDataSource(const data::ByteDataSource& dataSource) const {
     if (!isFramed()) {
-        return true;
+        return rawRowWidthBits_ > 0
+            && rawStartBitOffset_ >= 0
+            && rawStartBitOffset_ <= dataSource.bitCount();
     }
 
     for (const FrameSpan& frameSpan : frameSpans_) {
@@ -67,7 +96,12 @@ qsizetype FrameLayout::rowCount(const data::ByteDataSource& dataSource) const {
     }
 
     if (!framedMode_) {
-        return dataSource.rowCount();
+        if (rawRowWidthBits_ <= 0 || rawStartBitOffset_ >= dataSource.bitCount()) {
+            return 0;
+        }
+
+        const qsizetype addressableBits = dataSource.bitCount() - rawStartBitOffset_;
+        return (addressableBits + rawRowWidthBits_ - 1) / rawRowWidthBits_;
     }
 
     return frameSpans_.size();
@@ -78,7 +112,7 @@ int FrameLayout::columnCount(const data::ByteDataSource& dataSource) const {
         return frameMaxLengthBytes_;
     }
 
-    return dataSource.bytesPerRow();
+    return static_cast<int>((rawRowWidthBits_ + 7) / 8);
 }
 
 qsizetype FrameLayout::rowStartBit(const data::ByteDataSource& dataSource, int row) const {
@@ -94,7 +128,7 @@ qsizetype FrameLayout::rowStartBit(const data::ByteDataSource& dataSource, int r
         return frameSpan->startBit;
     }
 
-    return static_cast<qsizetype>(row) * dataSource.bytesPerRow() * 8;
+    return rawStartBitOffset_ + (static_cast<qsizetype>(row) * rawRowWidthBits_);
 }
 
 qsizetype FrameLayout::rowLengthBits(const data::ByteDataSource& dataSource, int row) const {
@@ -110,9 +144,12 @@ qsizetype FrameLayout::rowLengthBits(const data::ByteDataSource& dataSource, int
         return frameSpan->lengthBits;
     }
 
-    const qsizetype rowStartByte = static_cast<qsizetype>(row) * dataSource.bytesPerRow();
-    const qsizetype remainingBytes = dataSource.byteCount() - rowStartByte;
-    return qMax<qsizetype>(0, qMin<qsizetype>(dataSource.bytesPerRow(), remainingBytes) * 8);
+    const qsizetype startBit = rowStartBit(dataSource, row);
+    if (startBit < 0 || startBit >= dataSource.bitCount()) {
+        return 0;
+    }
+
+    return qMin(rawRowWidthBits_, dataSource.bitCount() - startBit);
 }
 
 int FrameLayout::rowLengthBytes(const data::ByteDataSource& dataSource, int row) const {
@@ -148,9 +185,11 @@ bool FrameLayout::hasDisplayByte(const data::ByteDataSource& dataSource, int row
 
 void FrameLayout::rebuildFrameMaxLengthBytes() {
     frameMaxLengthBytes_ = 0;
+    frameMaxLengthBits_ = 0;
     for (const FrameSpan& frameSpan : frameSpans_) {
         const int frameLengthBytes = static_cast<int>((frameSpan.lengthBits + 7) / 8);
         frameMaxLengthBytes_ = qMax(frameMaxLengthBytes_, frameLengthBytes);
+        frameMaxLengthBits_ = qMax(frameMaxLengthBits_, frameSpan.lengthBits);
     }
 }
 

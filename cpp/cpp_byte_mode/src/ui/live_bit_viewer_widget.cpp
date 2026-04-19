@@ -23,6 +23,21 @@ constexpr int kAutoFitVisibleColumnLimit = 10;
 constexpr int kMinimumVisibleCellSize = 2;
 constexpr int kMaximumAutoFitCellSize = 24;
 
+QFont bitDigitFont(const QFont& baseFont, int cellSize) {
+    QFont digitFont(baseFont);
+    digitFont.setFamilies({
+        QStringLiteral("Cascadia Mono"),
+        QStringLiteral("Consolas"),
+        QStringLiteral("Courier New"),
+        QStringLiteral("Monospace"),
+    });
+    digitFont.setStyleHint(QFont::StyleHint::Monospace);
+    digitFont.setBold(true);
+    digitFont.setHintingPreference(QFont::HintingPreference::PreferFullHinting);
+    digitFont.setPixelSize(qMax(7, cellSize - 1));
+    return digitFont;
+}
+
 }  // namespace
 
 LiveBitViewerWidget::LiveBitViewerWidget(QWidget* parent)
@@ -190,7 +205,8 @@ int LiveBitViewerWidget::effectiveCellSize() const {
         || previewRowCount_ <= 0
         || maxFrameBits_ <= 0
         || displayMode_ == QStringLiteral("binary")
-        || displayMode_ == QStringLiteral("hex")) {
+        || displayMode_ == QStringLiteral("hex")
+        || displayMode_ == QStringLiteral("digits")) {
         return requestedCellSize;
     }
 
@@ -293,7 +309,8 @@ void LiveBitViewerWidget::paintFrames(QPainter* painter, const QRect& clipRect) 
     }
 
     const bool showRowLabels = cellSize >= 8;
-    const bool useCircleGlyphs = displayMode_ == QStringLiteral("circles") && cellSize >= 4;
+    const bool useDigitGlyphs = displayMode_ == QStringLiteral("digits");
+    const bool useCircleGlyphs = !useDigitGlyphs && displayMode_ == QStringLiteral("circles") && cellSize >= 4;
     const int firstVisiblePreviewBit = qMax(0, (clipRect.left() - kRowLabelWidth - kCanvasPadding) / cellSize);
     const int lastVisiblePreviewBit = qMax(
         firstVisiblePreviewBit,
@@ -365,6 +382,14 @@ void LiveBitViewerWidget::paintFrames(QPainter* painter, const QRect& clipRect) 
 
                 if (hasHighlight) {
                     painter->fillRect(paintedCellRect, effectiveHighlightColor);
+                }
+
+                if (useDigitGlyphs) {
+                    painter->setFont(bitDigitFont(font(), cellSize));
+                    painter->setRenderHint(QPainter::TextAntialiasing, true);
+                    painter->setPen(QColor(0, 0, 0));
+                    painter->drawText(paintedCellRect, Qt::AlignCenter, bitIsOne ? QStringLiteral("1") : QStringLiteral("0"));
+                    continue;
                 }
 
                 if (useCircleGlyphs) {

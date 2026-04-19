@@ -1742,7 +1742,7 @@ BitstreamSyncDiscoveryCandidateList BitstreamSyncDiscoveryEngine::discover(
 
     if (!dataSource.hasData()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Load a file before running Find Frames.");
+            *errorMessage = QStringLiteral("Load a file before running Find Framing.");
         }
         return {};
     }

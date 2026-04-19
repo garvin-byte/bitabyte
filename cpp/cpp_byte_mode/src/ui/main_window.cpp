@@ -13,10 +13,13 @@
 #include "ui/inspection_controller.h"
 #include "ui/live_bit_viewer_widget.h"
 #include "ui/main_window_internal.h"
+#include "ui/pattern_search_dialog.h"
 
 #include <QAbstractButton>
+#include <QAbstractItemView>
 #include <QAction>
 #include <QButtonGroup>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QFileInfo>
 #include <QFontMetrics>
@@ -30,8 +33,11 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QResizeEvent>
+#include <QSignalBlocker>
 #include <QScrollArea>
 #include <QScreen>
 #include <QSpinBox>
@@ -42,6 +48,7 @@
 #include <QtGlobal>
 
 #include <cmath>
+#include <limits>
 
 namespace bitabyte::ui {
 
@@ -116,11 +123,15 @@ MainWindow::MainWindow(QWidget* parent)
         *frameBrowserController_,
         *inspectionController_,
         *syncPatternLineEdit_,
-        *frameChronologicalOrderButton_,
-        *frameLengthOrderButton_,
+        *frameWidthSpinBox_,
+        *frameBitOffsetSpinBox_,
+        *frameSortComboBox_,
         *this,
         *statusBar(),
         FramingController::Callbacks{
+            .isBitModeEnabled = [this]() {
+                return byteTableModel_ != nullptr && byteTableModel_->isBitDisplayMode();
+            },
             .selectedVisibleColumns = [this]() { return selectedVisibleColumns(); },
             .extractSelectionPattern = [this](QString* patternText, QString* errorMessage) {
                 return extractSelectionPattern(patternText, errorMessage);
@@ -137,6 +148,7 @@ MainWindow::MainWindow(QWidget* parent)
         }
     );
     framingController_->syncControlsFromState();
+    syncFrameWidthControls();
     inspectionController_->refreshLiveBitViewer();
     inspectionController_->refreshFieldInspector();
     inspectionController_->scheduleFrameFieldHintsRefresh();
@@ -149,6 +161,14 @@ MainWindow::MainWindow(QWidget* parent)
             inspectionController_->refreshFieldInspector();
         }
     });
+    connect(
+        frameFieldHintsPanel_,
+        &FrameFieldHintsPanel::addColumnRequested,
+        this,
+        [this](int startBit, int endBit, bool isConstant, const QString& label, const QString& valueText) {
+            addColumnDefinitionFromHint(startBit, endBit, isConstant, label, valueText);
+        }
+    );
     applyInitialWindowLayout();
     updateLoadedFileState();
 }
@@ -181,12 +201,22 @@ void MainWindow::buildMenus() {
         }
     });
 
-    bitstreamSyncDiscoveryAction_ = framingMenu->addAction(QStringLiteral("&Find Frames..."));
+    applyFixedFramingAction_ = framingMenu->addAction(QStringLiteral("Set &Fixed Framing"));
+    connect(applyFixedFramingAction_, &QAction::triggered, this, [this]() {
+        if (framingController_ != nullptr) {
+            framingController_->applyFixedFraming();
+        }
+    });
+
+    bitstreamSyncDiscoveryAction_ = framingMenu->addAction(QStringLiteral("Find &Framing..."));
     connect(bitstreamSyncDiscoveryAction_, &QAction::triggered, this, [this]() {
         if (framingController_ != nullptr) {
             framingController_->openBitstreamSyncDiscovery();
         }
     });
+
+    patternSearchAction_ = framingMenu->addAction(QStringLiteral("Find &Pattern..."));
+    connect(patternSearchAction_, &QAction::triggered, this, &MainWindow::openPatternSearchDialog);
 
     frameSelectionAction_ = framingMenu->addAction(QStringLiteral("Frame from &Selection"));
     connect(frameSelectionAction_, &QAction::triggered, this, [this]() {
@@ -256,39 +286,33 @@ void MainWindow::buildCentralWidget() {
     connect(exportCsvButton, &QPushButton::clicked, this, &MainWindow::exportCsv);
     controlsLayout->addWidget(exportCsvButton);
 
-    controlsLayout->addWidget(new QLabel(QStringLiteral("Bytes / Row:"), centralWidget));
-
-    bytesPerRowSpinBox_ = new QSpinBox(centralWidget);
-    bytesPerRowSpinBox_->setRange(1, 512);
-    bytesPerRowSpinBox_->setValue(dataSource_.bytesPerRow());
-    connect(bytesPerRowSpinBox_, &QSpinBox::valueChanged, this, &MainWindow::bytesPerRowChanged);
-    controlsLayout->addWidget(bytesPerRowSpinBox_);
+    controlsLayout->addWidget(new QLabel(QStringLiteral("Mode:"), centralWidget));
+    tableDisplayModeGroup_ = new QButtonGroup(centralWidget);
+    QRadioButton* byteModeButton = new QRadioButton(QStringLiteral("Byte"), centralWidget);
+    QRadioButton* bitModeButton = new QRadioButton(QStringLiteral("Bit"), centralWidget);
+    byteModeButton->setChecked(true);
+    tableDisplayModeGroup_->addButton(byteModeButton);
+    tableDisplayModeGroup_->addButton(bitModeButton);
+    controlsLayout->addWidget(byteModeButton);
+    controlsLayout->addWidget(bitModeButton);
+    connect(tableDisplayModeGroup_, QOverload<QAbstractButton*, bool>::of(&QButtonGroup::buttonToggled), this,
+        [this, bitModeButton](QAbstractButton* toggledButton, bool checked) {
+            if (!checked || toggledButton == nullptr) {
+                return;
+            }
+            setBitModeEnabled(toggledButton == bitModeButton);
+        });
 
     controlsLayout->addStretch();
     rootLayout->addLayout(controlsLayout);
 
-    QHBoxLayout* framingLayout = new QHBoxLayout();
-    framingLayout->setSpacing(8);
-    framingLayout->addWidget(new QLabel(QStringLiteral("Sync Pattern:"), centralWidget));
-
     syncPatternLineEdit_ = new QLineEdit(centralWidget);
     syncPatternLineEdit_->setPlaceholderText(QStringLiteral("0x1ACF, 1011011, or 0b1011011"));
-    connect(syncPatternLineEdit_, &QLineEdit::returnPressed, this, [this]() {
-        if (framingController_ != nullptr) {
-            framingController_->applySyncFraming();
-        }
-    });
-    framingLayout->addWidget(syncPatternLineEdit_, 1);
+    syncPatternLineEdit_->setVisible(false);
 
-    QPushButton* applyFramingButton = new QPushButton(QStringLiteral("Apply Framing"), centralWidget);
-    connect(applyFramingButton, &QPushButton::clicked, this, [this]() {
-        if (framingController_ != nullptr) {
-            framingController_->applySyncFraming();
-        }
-    });
-    framingLayout->addWidget(applyFramingButton);
-
-    QPushButton* discoveryButton = new QPushButton(QStringLiteral("Find Frames..."), centralWidget);
+    QHBoxLayout* framingLayout = new QHBoxLayout();
+    framingLayout->setSpacing(8);
+    QPushButton* discoveryButton = new QPushButton(QStringLiteral("Find Framing"), centralWidget);
     connect(discoveryButton, &QPushButton::clicked, this, [this]() {
         if (framingController_ != nullptr) {
             framingController_->openBitstreamSyncDiscovery();
@@ -296,42 +320,88 @@ void MainWindow::buildCentralWidget() {
     });
     framingLayout->addWidget(discoveryButton);
 
-    QPushButton* frameSelectionButton = new QPushButton(QStringLiteral("Frame Selection"), centralWidget);
-    connect(frameSelectionButton, &QPushButton::clicked, this, [this]() {
-        if (framingController_ != nullptr) {
-            framingController_->frameSelection();
-        }
-    });
-    framingLayout->addWidget(frameSelectionButton);
+    QPushButton* patternSearchButton = new QPushButton(QStringLiteral("Find Pattern"), centralWidget);
+    connect(patternSearchButton, &QPushButton::clicked, this, &MainWindow::openPatternSearchDialog);
+    framingLayout->addWidget(patternSearchButton);
 
-    QPushButton* clearFramingButton = new QPushButton(QStringLiteral("Clear Framing"), centralWidget);
-    connect(clearFramingButton, &QPushButton::clicked, this, [this]() {
-        if (framingController_ != nullptr) {
-            framingController_->clearFraming();
+    frameWidthLabel_ = new QLabel(QStringLiteral("Frame Width:"), centralWidget);
+    framingLayout->addWidget(frameWidthLabel_);
+
+    frameWidthSpinBox_ = new QSpinBox(centralWidget);
+    frameWidthSpinBox_->setRange(1, 65536);
+    frameWidthSpinBox_->setValue(dataSource_.bytesPerRow());
+    frameWidthSpinBox_->setToolTip(QStringLiteral("Fixed frame width in bytes"));
+    connect(frameWidthSpinBox_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        if (!frameLayout_.isFramed()) {
+            applyRawLayoutControls();
+            return;
+        }
+
+        if (framingController_ != nullptr && framingController_->fixedFramingControlsEditable()) {
+            framingController_->applyFixedFraming();
         }
     });
-    framingLayout->addWidget(clearFramingButton);
+    framingLayout->addWidget(frameWidthSpinBox_);
+
+    framingLayout->addWidget(new QLabel(QStringLiteral("Bit Offset:"), centralWidget));
+
+    frameBitOffsetSpinBox_ = new QSpinBox(centralWidget);
+    frameBitOffsetSpinBox_->setRange(0, 7);
+    frameBitOffsetSpinBox_->setToolTip(QStringLiteral("Bit offset applied before fixed framing"));
+    connect(frameBitOffsetSpinBox_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        if (!frameLayout_.isFramed()) {
+            applyRawLayoutControls();
+            return;
+        }
+
+        if (framingController_ != nullptr && framingController_->fixedFramingControlsEditable()) {
+            framingController_->applyFixedFraming();
+        }
+    });
+    framingLayout->addWidget(frameBitOffsetSpinBox_);
+
+    setFrameButton_ = new QPushButton(QStringLiteral("Set Frame"), centralWidget);
+    connect(setFrameButton_, &QPushButton::clicked, this, [this]() {
+        if (framingController_ != nullptr) {
+            framingController_->applyFixedFraming();
+        }
+    });
+    framingLayout->addWidget(setFrameButton_);
 
     framingLayout->addStretch();
     rootLayout->addLayout(framingLayout);
 
     QHBoxLayout* rowOrderLayout = new QHBoxLayout();
     rowOrderLayout->setSpacing(8);
-    rowOrderLayout->addWidget(new QLabel(QStringLiteral("Frame Order:"), centralWidget));
-    frameChronologicalOrderButton_ = new QPushButton(centralWidget);
-    connect(frameChronologicalOrderButton_, &QPushButton::clicked, this, [this]() {
+    rowOrderLayout->addWidget(new QLabel(QStringLiteral("Sort Frame By:"), centralWidget));
+    frameSortComboBox_ = new QComboBox(centralWidget);
+    frameSortComboBox_->addItem(QStringLiteral("Chronological (Ascending)"));
+    frameSortComboBox_->addItem(QStringLiteral("Chronological (Descending)"));
+    frameSortComboBox_->addItem(QStringLiteral("Frame Size (Ascending)"));
+    frameSortComboBox_->addItem(QStringLiteral("Frame Size (Descending)"));
+    connect(frameSortComboBox_, qOverload<int>(&QComboBox::currentIndexChanged), this, [this](int index) {
         if (framingController_ != nullptr) {
-            framingController_->cycleFrameChronologicalOrder();
+            framingController_->setFrameSortOption(index);
         }
     });
-    rowOrderLayout->addWidget(frameChronologicalOrderButton_);
-    frameLengthOrderButton_ = new QPushButton(centralWidget);
-    connect(frameLengthOrderButton_, &QPushButton::clicked, this, [this]() {
-        if (framingController_ != nullptr) {
-            framingController_->cycleFrameLengthOrder();
+    rowOrderLayout->addWidget(frameSortComboBox_);
+
+    rowOrderLayout->addSpacing(16);
+    rowOrderLayout->addWidget(new QLabel(QStringLiteral("Size:"), centralWidget));
+    tableBitSizeSpinBox_ = new QSpinBox(centralWidget);
+    tableBitSizeSpinBox_->setRange(2, 24);
+    tableBitSizeSpinBox_->setValue(12);
+    tableBitSizeSpinBox_->setEnabled(false);
+    connect(tableBitSizeSpinBox_, qOverload<int>(&QSpinBox::valueChanged), this, [this](int) {
+        if (byteTableModel_ != nullptr) {
+            resizeTableColumns();
+            if (byteTableView_ != nullptr) {
+                byteTableView_->viewport()->update();
+            }
         }
     });
-    rowOrderLayout->addWidget(frameLengthOrderButton_);
+    rowOrderLayout->addWidget(tableBitSizeSpinBox_);
+
     rowOrderLayout->addStretch();
     rootLayout->addLayout(rowOrderLayout);
 
@@ -417,6 +487,40 @@ void MainWindow::buildCentralWidget() {
     statusBar()->showMessage(QStringLiteral("No file loaded"));
 }
 
+void MainWindow::openPatternSearchDialog() {
+    if (byteTableModel_ == nullptr) {
+        return;
+    }
+
+    PatternSearchDialog dialog(
+        &dataSource_,
+        syncPatternLineEdit_ != nullptr ? syncPatternLineEdit_->text() : QString{},
+        this
+    );
+    connect(
+        &dialog,
+        &PatternSearchDialog::highlightRangesChanged,
+        this,
+        [this](const QVector<QPair<qsizetype, qsizetype>>& absoluteBitRanges) {
+            if (byteTableModel_ != nullptr) {
+                byteTableModel_->setPatternHighlightRanges(absoluteBitRanges);
+            }
+        }
+    );
+    connect(&dialog, &PatternSearchDialog::focusMatchRequested, this, &MainWindow::focusPatternMatch);
+    connect(&dialog, &PatternSearchDialog::frameByPatternRequested, this, [this](const QString& patternText) {
+        if (framingController_ == nullptr) {
+            return;
+        }
+
+        QString errorMessage;
+        if (!framingController_->frameByPattern(patternText, &errorMessage)) {
+            QMessageBox::warning(this, QStringLiteral("Frame by Pattern"), errorMessage);
+        }
+    });
+    dialog.exec();
+}
+
 void MainWindow::buildColumnDefinitionsDock() {
     columnDefinitionsDock_ = new QDockWidget(QStringLiteral("Column Definitions"), this);
     columnDefinitionsDock_->setAllowedAreas(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea);
@@ -427,11 +531,14 @@ void MainWindow::buildColumnDefinitionsDock() {
     if (frameBrowserController_ != nullptr) {
         frameBrowserController_->setPanel(frameGroupingPanel_);
     }
-    QGroupBox* frameFieldHintsGroup = new QGroupBox(QStringLiteral("Find Frames Hints"), leftDockSplitter);
+    QGroupBox* frameFieldHintsGroup = new QGroupBox(QStringLiteral("Framing Hints"), leftDockSplitter);
     QVBoxLayout* frameFieldHintsLayout = new QVBoxLayout(frameFieldHintsGroup);
     frameFieldHintsLayout->setContentsMargins(8, 8, 8, 8);
     frameFieldHintsLayout->setSpacing(6);
-    frameFieldHintsPanel_ = new FrameFieldHintsPanel(frameFieldHintsGroup);
+    frameFieldHintsPanel_ = new FrameFieldHintsPanel(
+        FrameFieldHintsPanel::Mode::BrowseOnly,
+        frameFieldHintsGroup
+    );
     frameFieldHintsLayout->addWidget(frameFieldHintsPanel_);
     leftDockSplitter->addWidget(columnDefinitionsPanel_);
     leftDockSplitter->addWidget(frameGroupingPanel_);
@@ -554,11 +661,14 @@ void MainWindow::buildLiveBitViewerDock() {
     liveBitViewerModeGroup_ = new QButtonGroup(displayGroup);
     QRadioButton* squaresButton = new QRadioButton(QStringLiteral("Squares"), displayGroup);
     QRadioButton* circlesButton = new QRadioButton(QStringLiteral("Circles"), displayGroup);
+    QRadioButton* digitsButton = new QRadioButton(QStringLiteral("Digits"), displayGroup);
     squaresButton->setChecked(true);
     liveBitViewerModeGroup_->addButton(squaresButton);
     liveBitViewerModeGroup_->addButton(circlesButton);
+    liveBitViewerModeGroup_->addButton(digitsButton);
     modeLayout->addWidget(squaresButton);
     modeLayout->addWidget(circlesButton);
+    modeLayout->addWidget(digitsButton);
     modeLayout->addStretch();
     displayLayout->addLayout(modeLayout);
 
@@ -607,6 +717,7 @@ void MainWindow::buildLiveBitViewerDock() {
         QOverload<QAbstractButton*, bool>::of(&QButtonGroup::buttonToggled),
         this,
         [this](QAbstractButton*, bool) {
+            syncTableBitDisplayMode();
             if (inspectionController_ != nullptr) {
                 inspectionController_->scheduleLiveBitViewerRefresh();
             }
@@ -617,6 +728,8 @@ void MainWindow::buildLiveBitViewerDock() {
             inspectionController_->scheduleLiveBitViewerRefresh();
         }
     });
+
+    syncTableBitDisplayMode();
 }
 
 void MainWindow::applyInitialWindowLayout() {
@@ -651,6 +764,84 @@ void MainWindow::applyInitialWindowLayout() {
     }
 }
 
+void MainWindow::syncFrameWidthControls() {
+    if (frameWidthSpinBox_ == nullptr || frameBitOffsetSpinBox_ == nullptr) {
+        return;
+    }
+
+    const bool bitModeEnabled = byteTableModel_ != nullptr && byteTableModel_->isBitDisplayMode();
+    const bool fixedFramingActive =
+        frameLayout_.isFramed() && framingController_ != nullptr && framingController_->fixedFramingControlsEditable();
+    const qsizetype widthBits = fixedFramingActive ? frameLayout_.frameMaxLengthBits() : frameLayout_.rawRowWidthBits();
+    const int displayWidthValue = bitModeEnabled
+        ? static_cast<int>(qBound<qsizetype>(
+            static_cast<qsizetype>(1),
+            widthBits,
+            static_cast<qsizetype>(std::numeric_limits<int>::max())
+        ))
+        : qMax(1, static_cast<int>((widthBits + 7) / 8));
+    const int maximumWidthValue = bitModeEnabled
+        ? (
+            dataSource_.hasData()
+                ? static_cast<int>(qBound<qsizetype>(
+                    static_cast<qsizetype>(1),
+                    dataSource_.bitCount(),
+                    static_cast<qsizetype>(std::numeric_limits<int>::max())
+                ))
+                : 65536
+        )
+        : 65536;
+
+    if (frameWidthLabel_ != nullptr) {
+        frameWidthLabel_->setText(bitModeEnabled ? QStringLiteral("Frame Width (Bits):") : QStringLiteral("Frame Width:"));
+    }
+
+    {
+        const QSignalBlocker widthBlocker(frameWidthSpinBox_);
+        frameWidthSpinBox_->setRange(1, qMax(1, maximumWidthValue));
+        frameWidthSpinBox_->setToolTip(
+            bitModeEnabled
+                ? QStringLiteral("Raw/fixed frame width in bits")
+                : QStringLiteral("Raw/fixed frame width in bytes")
+        );
+        frameWidthSpinBox_->setValue(displayWidthValue);
+    }
+
+    if (!frameLayout_.isFramed()) {
+        const QSignalBlocker offsetBlocker(frameBitOffsetSpinBox_);
+        frameBitOffsetSpinBox_->setValue(static_cast<int>(qBound<qsizetype>(
+            static_cast<qsizetype>(0),
+            frameLayout_.rawStartBitOffset(),
+            static_cast<qsizetype>(7)
+        )));
+    }
+}
+
+void MainWindow::applyRawLayoutControls() {
+    if (byteTableModel_ == nullptr || frameWidthSpinBox_ == nullptr || frameBitOffsetSpinBox_ == nullptr) {
+        return;
+    }
+
+    const bool bitModeEnabled = byteTableModel_->isBitDisplayMode();
+    const int frameWidthValue = qMax(1, frameWidthSpinBox_->value());
+    const int bitOffset = qBound(0, frameBitOffsetSpinBox_->value(), 7);
+    const qsizetype rowWidthBits = bitModeEnabled
+        ? static_cast<qsizetype>(frameWidthValue)
+        : static_cast<qsizetype>(frameWidthValue) * 8;
+
+    if (!bitModeEnabled) {
+        dataSource_.setBytesPerRow(frameWidthValue);
+    }
+    frameLayout_.setRawLayout(rowWidthBits, bitOffset);
+    byteTableModel_->reload();
+    resizeTableColumns();
+    updateLoadedFileState();
+    if (inspectionController_ != nullptr) {
+        inspectionController_->updateSelectionStatus();
+        inspectionController_->refreshLiveBitViewer();
+    }
+}
+
 void MainWindow::updateLoadedFileState() {
     fileInfoLabel_->setText(fileSummaryText());
     if (frameBrowserInfoLabel_ != nullptr) {
@@ -664,6 +855,7 @@ void MainWindow::updateLoadedFileState() {
     if (framingController_ != nullptr) {
         framingController_->syncControlsFromState();
     }
+    syncFrameWidthControls();
     refreshColumnDefinitionsPanel();
     if (frameBrowserController_ != nullptr) {
         frameBrowserController_->refreshPanel();
@@ -676,23 +868,36 @@ void MainWindow::updateLoadedFileState() {
     reloadFileAction_->setEnabled(hasData);
     exportCsvAction_->setEnabled(hasData);
     applyFramingAction_->setEnabled(hasData);
+    const bool fixedFramingControlsEditable =
+        framingController_ != nullptr && framingController_->fixedFramingControlsEditable();
+    if (applyFixedFramingAction_ != nullptr) {
+        applyFixedFramingAction_->setEnabled(fixedFramingControlsEditable);
+    }
     if (bitstreamSyncDiscoveryAction_ != nullptr) {
         bitstreamSyncDiscoveryAction_->setEnabled(hasData);
+    }
+    if (patternSearchAction_ != nullptr) {
+        patternSearchAction_->setEnabled(hasData);
     }
     frameSelectionAction_->setEnabled(hasColumnSelection());
     clearFramingAction_->setEnabled(hasData && frameLayout_.isFramed());
     addColumnDefinitionAction_->setEnabled(hasData);
     defineSelectionColumnAction_->setEnabled(hasColumnSelection());
     combineSelectionAction_->setEnabled(hasColumnSelection());
-    splitBinaryAction_->setEnabled(hasColumnSelection());
-    splitNibblesAction_->setEnabled(hasColumnSelection());
-    clearSelectionSplitsAction_->setEnabled(hasColumnSelection());
-    bytesPerRowSpinBox_->setEnabled(!frameLayout_.isFramed());
-    if (frameChronologicalOrderButton_ != nullptr) {
-        frameChronologicalOrderButton_->setEnabled(hasData && frameLayout_.isFramed());
+    if (tableBitSizeSpinBox_ != nullptr) {
+        tableBitSizeSpinBox_->setEnabled(hasData);
     }
-    if (frameLengthOrderButton_ != nullptr) {
-        frameLengthOrderButton_->setEnabled(hasData && frameLayout_.isFramed());
+    if (frameWidthSpinBox_ != nullptr) {
+        frameWidthSpinBox_->setEnabled(fixedFramingControlsEditable);
+    }
+    if (frameBitOffsetSpinBox_ != nullptr) {
+        frameBitOffsetSpinBox_->setEnabled(fixedFramingControlsEditable);
+    }
+    if (setFrameButton_ != nullptr) {
+        setFrameButton_->setEnabled(fixedFramingControlsEditable);
+    }
+    if (frameSortComboBox_ != nullptr) {
+        frameSortComboBox_->setEnabled(hasData && frameLayout_.isFramed());
     }
     if (frameGroupingPanel_ != nullptr) {
         frameGroupingPanel_->setFramingActive(hasData && frameLayout_.isFramed());
@@ -718,18 +923,29 @@ void MainWindow::updateLoadedFileState() {
 }
 
 void MainWindow::updateWindowTitle() {
+    const QString modeSuffix = byteTableModel_ != nullptr && byteTableModel_->isBitDisplayMode()
+        ? QStringLiteral(" Bit Mode")
+        : QStringLiteral(" Byte Mode");
     if (!dataSource_.hasData()) {
-        setWindowTitle(QStringLiteral("Bitabyte C++ Byte Mode"));
+        setWindowTitle(QStringLiteral("Bitabyte C++%1").arg(modeSuffix));
         return;
     }
 
     const QFileInfo fileInfo(dataSource_.sourceFilePath());
     if (frameLayout_.isFramed()) {
-        setWindowTitle(QStringLiteral("Bitabyte C++ Byte Mode - %1 [Framed]").arg(fileInfo.fileName()));
+        setWindowTitle(QStringLiteral("Bitabyte C++%1 - %2 [Framed]").arg(modeSuffix, fileInfo.fileName()));
         return;
     }
 
-    setWindowTitle(QStringLiteral("Bitabyte C++ Byte Mode - %1").arg(fileInfo.fileName()));
+    setWindowTitle(QStringLiteral("Bitabyte C++%1 - %2").arg(modeSuffix, fileInfo.fileName()));
+}
+
+void MainWindow::resizeEvent(QResizeEvent* resizeEvent) {
+    QMainWindow::resizeEvent(resizeEvent);
+
+    if (byteTableModel_ != nullptr && byteTableModel_->isBitDisplayMode()) {
+        resizeTableColumns();
+    }
 }
 
 void MainWindow::resizeTableColumns() {
@@ -737,16 +953,42 @@ void MainWindow::resizeTableColumns() {
         return;
     }
 
+    const int requestedSize = tableBitSizeSpinBox_ != nullptr ? tableBitSizeSpinBox_->value() : 12;
+    const int byteFontPixelSize = qMax(10, requestedSize + 2);
+    byteTableModel_->setContentFontPixelSize(byteFontPixelSize);
+
     const int modelColumnCount = byteTableModel_->columnCount();
     const bool hasFrameLengthColumn = byteTableModel_->hasFrameLengthColumn();
     const QFontMetrics headerMetrics(byteTableView_->horizontalHeader()->font());
-    const QFontMetrics contentMetrics(byteTableView_->font());
+    const QFontMetrics contentMetrics(byteTableModel_->contentFont());
     auto minimumHeaderWidth = [&](const QString& labelText) {
         return labelText.isEmpty() ? 0 : headerMetrics.horizontalAdvance(labelText) + 16;
     };
     auto contentWidthForCharacters = [&](int characterCount) {
         return contentMetrics.horizontalAdvance(QString(qMax(1, characterCount), QLatin1Char('0'))) + 18;
     };
+
+    if (byteTableModel_->isBitDisplayMode()) {
+        const bool digitMode =
+            byteTableModel_->bitCellDisplayMode() == models::ByteTableModel::BitCellDisplayMode::Digits;
+        const int bitColumnWidth = digitMode ? qMax(6, requestedSize + 2) : requestedSize;
+        const int bitRowHeight = digitMode ? qMax(8, requestedSize + 4) : qMax(4, requestedSize + 1);
+
+        if (byteTableView_->verticalHeader() != nullptr) {
+            byteTableView_->verticalHeader()->setDefaultSectionSize(bitRowHeight);
+        }
+        for (int modelColumn = 0; modelColumn < modelColumnCount; ++modelColumn) {
+            byteTableView_->setColumnWidth(
+                modelColumn,
+                hasFrameLengthColumn && modelColumn == 0 ? 44 : bitColumnWidth
+            );
+        }
+        return;
+    }
+
+    if (byteTableView_->verticalHeader() != nullptr) {
+        byteTableView_->verticalHeader()->setDefaultSectionSize(qMax(22, contentMetrics.height() + 8));
+    }
 
     for (int modelColumn = 0; modelColumn < modelColumnCount; ++modelColumn) {
         int minimumWidth = 36;
@@ -806,6 +1048,127 @@ void MainWindow::resizeTableColumns() {
         }
 
         byteTableView_->setColumnWidth(modelColumn, qMax(minimumWidth, estimatedContentWidth));
+    }
+}
+
+void MainWindow::setBitModeEnabled(bool enabled) {
+    if (byteTableModel_ == nullptr) {
+        return;
+    }
+
+    const auto targetMode = enabled
+        ? models::ByteTableModel::DisplayMode::Bit
+        : models::ByteTableModel::DisplayMode::Byte;
+    if (byteTableModel_->displayMode() == targetMode) {
+        return;
+    }
+
+    if (!enabled && !frameLayout_.isFramed()) {
+        const int byteWidth = qMax(1, static_cast<int>((frameLayout_.rawRowWidthBits() + 7) / 8));
+        dataSource_.setBytesPerRow(byteWidth);
+        frameLayout_.setRawLayout(static_cast<qsizetype>(byteWidth) * 8, frameLayout_.rawStartBitOffset());
+    }
+
+    const QSet<int> selectedColumns = selectedVisibleColumns();
+    int selectionStartBit = std::numeric_limits<int>::max();
+    int selectionEndBit = std::numeric_limits<int>::min();
+    for (int visibleColumnIndex : selectedColumns) {
+        const features::columns::VisibleByteColumn visibleColumn = byteTableModel_->visibleByteColumn(visibleColumnIndex);
+        selectionStartBit = qMin(selectionStartBit, visibleColumn.absoluteStartBit);
+        selectionEndBit = qMax(selectionEndBit, visibleColumn.absoluteEndBit);
+    }
+
+    const QModelIndex currentIndex = byteTableView_ != nullptr ? byteTableView_->currentIndex() : QModelIndex{};
+    const int targetRow = currentIndex.isValid() ? currentIndex.row() : 0;
+    const qsizetype currentStartBit = byteTableModel_->displayStartBitForIndex(currentIndex);
+
+    byteTableModel_->setDisplayMode(targetMode);
+    if (byteTableView_ != nullptr) {
+        byteTableView_->setShowGrid(true);
+        if (byteTableView_->horizontalHeader() != nullptr) {
+            byteTableView_->horizontalHeader()->setVisible(!enabled);
+        }
+        if (byteTableView_->verticalHeader() != nullptr) {
+            byteTableView_->verticalHeader()->setVisible(!enabled);
+        }
+    }
+    syncFrameWidthControls();
+    resizeTableColumns();
+
+    if (selectionStartBit <= selectionEndBit) {
+        selectVisibleColumnsAtRow(visibleColumnsForAbsoluteBitRange(selectionStartBit, selectionEndBit), targetRow);
+    } else if (currentStartBit >= 0) {
+        const int relativeStartBit = static_cast<int>(currentStartBit - frameLayout_.rowStartBit(dataSource_, targetRow));
+        selectVisibleColumnsAtRow(
+            visibleColumnsForAbsoluteBitRange(relativeStartBit, relativeStartBit),
+            targetRow
+        );
+    }
+
+    updateLoadedFileState();
+    if (inspectionController_ != nullptr) {
+        inspectionController_->updateSelectionStatus();
+        inspectionController_->scheduleLiveBitViewerRefresh();
+        inspectionController_->scheduleFrameFieldHintsRefresh();
+    }
+    if (byteTableView_ != nullptr) {
+        byteTableView_->viewport()->update();
+        byteTableView_->horizontalHeader()->viewport()->update();
+    }
+}
+
+void MainWindow::focusPatternMatch(qsizetype startBit, qsizetype bitCount) {
+    if (byteTableModel_ == nullptr || byteTableView_ == nullptr || !dataSource_.hasData() || bitCount <= 0) {
+        return;
+    }
+
+    const qsizetype matchEndBit = startBit + bitCount - 1;
+    const int totalRows = byteTableModel_->rowCount();
+    for (int row = 0; row < totalRows; ++row) {
+        const qsizetype rowStartBit = frameLayout_.rowStartBit(dataSource_, row);
+        const qsizetype rowLengthBits = frameLayout_.rowLengthBits(dataSource_, row);
+        if (rowLengthBits <= 0) {
+            continue;
+        }
+
+        const qsizetype rowEndBit = rowStartBit + rowLengthBits - 1;
+        if (matchEndBit < rowStartBit || startBit > rowEndBit) {
+            continue;
+        }
+
+        const int relativeStartBit = static_cast<int>(qMax(startBit, rowStartBit) - rowStartBit);
+        const int relativeEndBit = static_cast<int>(qMin(matchEndBit, rowEndBit) - rowStartBit);
+        selectVisibleColumnsAtRow(visibleColumnsForAbsoluteBitRange(relativeStartBit, relativeEndBit), row);
+        if (byteTableView_->currentIndex().isValid()) {
+            byteTableView_->scrollTo(byteTableView_->currentIndex(), QAbstractItemView::PositionAtCenter);
+        }
+        byteTableView_->setFocus();
+        return;
+    }
+}
+
+void MainWindow::syncTableBitDisplayMode() {
+    if (byteTableModel_ == nullptr || liveBitViewerModeGroup_ == nullptr || liveBitViewerModeGroup_->checkedButton() == nullptr) {
+        return;
+    }
+
+    const QString modeText = liveBitViewerModeGroup_->checkedButton()->text().trimmed().toLower();
+    auto bitCellDisplayMode = models::ByteTableModel::BitCellDisplayMode::Squares;
+    if (modeText == QStringLiteral("circles")) {
+        bitCellDisplayMode = models::ByteTableModel::BitCellDisplayMode::Circles;
+    } else if (modeText == QStringLiteral("digits")) {
+        bitCellDisplayMode = models::ByteTableModel::BitCellDisplayMode::Digits;
+    }
+
+    byteTableModel_->setBitCellDisplayMode(bitCellDisplayMode);
+    if (byteTableView_ != nullptr) {
+        byteTableView_->setShowGrid(true);
+    }
+    if (byteTableModel_->isBitDisplayMode()) {
+        resizeTableColumns();
+        if (byteTableView_ != nullptr) {
+            byteTableView_->viewport()->update();
+        }
     }
 }
 

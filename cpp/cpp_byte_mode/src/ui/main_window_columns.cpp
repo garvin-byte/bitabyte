@@ -299,11 +299,13 @@ void MainWindow::showTableContextMenu(const QPoint& pos) {
     const QSet<int> selectedColumns = selectedVisibleColumns();
     const QSet<int> plainByteTargets = byteTableModel_->plainByteTargetsForVisibleColumns(selectedColumns);
     const int selectedDefinitionIndex = selectedDefinitionIndexFromCurrentSelection();
+    const bool bitModeEnabled = byteTableModel_->isBitDisplayMode();
     const bool canSplitToBinary = byteTableModel_->selectionCanBecomeBinary(selectedColumns)
-        || (!plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size());
+        || (!bitModeEnabled && !plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size());
     const bool canSplitToNibbles = byteTableModel_->selectionCanBecomeNibble(selectedColumns)
-        || (!plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size());
-    const bool canClearSplits = !byteTableModel_->splitByteTargetsForVisibleColumns(selectedColumns).isEmpty();
+        || (!bitModeEnabled && !plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size());
+    const bool canClearSplits = !bitModeEnabled
+        && !byteTableModel_->splitByteTargetsForVisibleColumns(selectedColumns).isEmpty();
     QString combineErrorMessage;
     const bool canCombine = selectedColumns.size() >= 2
         && !combinedDisplayFormat(selectedColumns, &combineErrorMessage).isEmpty();
@@ -318,13 +320,18 @@ void MainWindow::showTableContextMenu(const QPoint& pos) {
     QAction* combineSelectionMenuAction = menu.addAction(QStringLiteral("Combine Selection"));
     combineSelectionMenuAction->setEnabled(canCombine);
 
-    menu.addSeparator();
-    QAction* splitBinaryMenuAction = menu.addAction(QStringLiteral("Split Selection as Binary"));
-    splitBinaryMenuAction->setEnabled(canSplitToBinary);
-    QAction* splitNibblesMenuAction = menu.addAction(QStringLiteral("Split Selection as Nibbles"));
-    splitNibblesMenuAction->setEnabled(canSplitToNibbles);
-    QAction* clearSplitsMenuAction = menu.addAction(QStringLiteral("Clear Selected Splits"));
-    clearSplitsMenuAction->setEnabled(canClearSplits);
+    QAction* splitBinaryMenuAction = nullptr;
+    QAction* splitNibblesMenuAction = nullptr;
+    QAction* clearSplitsMenuAction = nullptr;
+    if (!bitModeEnabled) {
+        menu.addSeparator();
+        splitBinaryMenuAction = menu.addAction(QStringLiteral("Split Selection as Binary"));
+        splitBinaryMenuAction->setEnabled(canSplitToBinary);
+        splitNibblesMenuAction = menu.addAction(QStringLiteral("Split Selection as Nibbles"));
+        splitNibblesMenuAction->setEnabled(canSplitToNibbles);
+        clearSplitsMenuAction = menu.addAction(QStringLiteral("Clear Selected Splits"));
+        clearSplitsMenuAction->setEnabled(canClearSplits);
+    }
     QAction* groupSelectionMenuAction = nullptr;
     const bool canGroupSelection =
         frameLayout_.isFramed()
@@ -377,6 +384,7 @@ void MainWindow::refreshColumnDefinitionsPanel() {
     const QSet<int> plainByteTargets = byteTableModel_ != nullptr
         ? byteTableModel_->plainByteTargetsForVisibleColumns(selectedColumns)
         : QSet<int>{};
+    const bool bitModeEnabled = byteTableModel_ != nullptr && byteTableModel_->isBitDisplayMode();
     if (frameSelectionAction_ != nullptr) {
         frameSelectionAction_->setEnabled(hasSelectableColumns);
     }
@@ -392,18 +400,19 @@ void MainWindow::refreshColumnDefinitionsPanel() {
     if (splitBinaryAction_ != nullptr) {
         const bool canSplitToBinary = byteTableModel_ != nullptr
             && (byteTableModel_->selectionCanBecomeBinary(selectedColumns)
-                || (!plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size()));
-        splitBinaryAction_->setEnabled(canSplitToBinary);
+                || (!bitModeEnabled && !plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size()));
+        splitBinaryAction_->setEnabled(!bitModeEnabled && canSplitToBinary);
     }
     if (splitNibblesAction_ != nullptr) {
         const bool canSplitToNibbles = byteTableModel_ != nullptr
             && (byteTableModel_->selectionCanBecomeNibble(selectedColumns)
-                || (!plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size()));
-        splitNibblesAction_->setEnabled(canSplitToNibbles);
+                || (!bitModeEnabled && !plainByteTargets.isEmpty() && plainByteTargets.size() == selectedColumns.size()));
+        splitNibblesAction_->setEnabled(!bitModeEnabled && canSplitToNibbles);
     }
     if (clearSelectionSplitsAction_ != nullptr) {
         clearSelectionSplitsAction_->setEnabled(
-            byteTableModel_ != nullptr
+            !bitModeEnabled
+            && byteTableModel_ != nullptr
             && !byteTableModel_->splitByteTargetsForVisibleColumns(selectedColumns).isEmpty()
         );
     }
@@ -417,37 +426,85 @@ void MainWindow::refreshColumnDefinitionsPanel() {
 }
 
 QString MainWindow::nextColumnColorName() const {
-    static const QStringList autoColorSequence = {
-        QStringLiteral("Sky"),
-        QStringLiteral("Coral"),
-        QStringLiteral("Mint"),
-        QStringLiteral("Gold"),
-        QStringLiteral("Lilac"),
-        QStringLiteral("Sunshine"),
+    return detail::nextAutoColumnColorName(columnDefinitions_);
+}
+
+void MainWindow::addColumnDefinitionFromHint(
+    int startBit,
+    int endBit,
+    bool isConstant,
+    const QString& label,
+    const QString& valueText
+) {
+    Q_UNUSED(valueText);
+
+    if (!dataSource_.hasData() || startBit < 0 || endBit < startBit) {
+        return;
+    }
+
+    for (const features::columns::ByteColumnDefinition& columnDefinition : columnDefinitions_) {
+        if (!(endBit < columnDefinition.startAbsoluteBit() || startBit > columnDefinition.endAbsoluteBit())) {
+            return;
+        }
+    }
+
+    auto defaultRangeLabel = [](int rangeStartBit, int rangeEndBit) {
+        if ((rangeStartBit % 8) == 0 && (rangeEndBit % 8) == 7) {
+            const int startByte = rangeStartBit / 8;
+            const int endByte = rangeEndBit / 8;
+            return startByte == endByte
+                ? QStringLiteral("Byte %1").arg(startByte)
+                : QStringLiteral("Bytes %1-%2").arg(startByte).arg(endByte);
+        }
+        return rangeStartBit == rangeEndBit
+            ? QStringLiteral("Bit %1").arg(rangeStartBit)
+            : QStringLiteral("Bits %1-%2").arg(rangeStartBit).arg(rangeEndBit);
     };
 
-    QHash<QString, int> usedCounts;
-    for (const QString& colorName : autoColorSequence) {
-        usedCounts.insert(colorName, 0);
-    }
-
-    for (const features::columns::ByteColumnDefinition& definition : columnDefinitions_) {
-        if (usedCounts.contains(definition.colorName)) {
-            usedCounts[definition.colorName] += 1;
+    auto nextCounterLabel = [this]() {
+        int nextCounterIndex = 1;
+        for (const features::columns::ByteColumnDefinition& definition : columnDefinitions_) {
+            const QString trimmedLabel = definition.label.trimmed();
+            if (trimmedLabel == QStringLiteral("Counter")) {
+                nextCounterIndex = qMax(nextCounterIndex, 2);
+                continue;
+            }
+            if (!trimmedLabel.startsWith(QStringLiteral("Counter "))) {
+                continue;
+            }
+            bool parsed = false;
+            const int counterIndex = trimmedLabel.mid(QStringLiteral("Counter ").size()).toInt(&parsed);
+            if (parsed) {
+                nextCounterIndex = qMax(nextCounterIndex, counterIndex + 1);
+            }
         }
-    }
+        return QStringLiteral("Counter %1").arg(nextCounterIndex);
+    };
 
-    QString bestColor = autoColorSequence.first();
-    int bestCount = std::numeric_limits<int>::max();
-    for (const QString& colorName : autoColorSequence) {
-        const int usedCount = usedCounts.value(colorName, 0);
-        if (usedCount < bestCount) {
-            bestCount = usedCount;
-            bestColor = colorName;
-        }
-    }
+    features::columns::ByteColumnDefinition definition;
+    definition.unit = QStringLiteral("bit");
+    definition.startBit = startBit;
+    definition.totalBits = endBit - startBit + 1;
+    definition.startByte = startBit / 8;
+    definition.endByte = endBit / 8;
+    definition.label = isConstant
+        ? (label.trimmed().isEmpty() ? defaultRangeLabel(startBit, endBit) : label.trimmed())
+        : nextCounterLabel();
+    definition.displayFormat = isConstant
+        ? (definition.totalBits % 4 == 0 ? QStringLiteral("hex") : QStringLiteral("binary"))
+        : QStringLiteral("decimal");
+    definition.colorName = nextColumnColorName();
 
-    return bestColor;
+    columnDefinitions_.append(definition);
+    byteTableModel_->reload();
+    refreshColumnDefinitionsPanel();
+    resizeTableColumns();
+    if (inspectionController_ != nullptr) {
+        inspectionController_->updateSelectionStatus();
+        inspectionController_->refreshLiveBitViewer();
+        inspectionController_->scheduleFrameFieldHintsRefresh();
+    }
+    statusBar()->showMessage(QStringLiteral("Added column definition from framing hint"), 3000);
 }
 
 bool MainWindow::buildDefinitionFromSelection(
@@ -795,6 +852,13 @@ QSet<int> MainWindow::editableVisibleColumnsForSeed(int visibleColumnIndex) cons
 }
 
 void MainWindow::selectVisibleColumns(const QSet<int>& visibleColumns) {
+    const int targetRow = (byteTableView_ != nullptr && byteTableView_->currentIndex().isValid())
+        ? byteTableView_->currentIndex().row()
+        : 0;
+    selectVisibleColumnsAtRow(visibleColumns, targetRow);
+}
+
+void MainWindow::selectVisibleColumnsAtRow(const QSet<int>& visibleColumns, int row) {
     if (byteTableView_ == nullptr
         || byteTableView_->selectionModel() == nullptr
         || byteTableModel_ == nullptr
@@ -806,8 +870,7 @@ void MainWindow::selectVisibleColumns(const QSet<int>& visibleColumns) {
     QList<int> sortedColumns = visibleColumns.values();
     std::sort(sortedColumns.begin(), sortedColumns.end());
 
-    int targetRow = byteTableView_->currentIndex().isValid() ? byteTableView_->currentIndex().row() : 0;
-    targetRow = qBound(0, targetRow, byteTableModel_->rowCount() - 1);
+    const int targetRow = qBound(0, row, byteTableModel_->rowCount() - 1);
 
     const int modelColumnOffset = byteTableModel_->hasFrameLengthColumn() ? 1 : 0;
     QItemSelection columnSelection;

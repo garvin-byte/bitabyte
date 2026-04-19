@@ -198,11 +198,10 @@ bool patternMatchesAtOffset(
     return (candidateByte & trailingMask) == (expectedByte & trailingMask);
 }
 
-}  // namespace
-
-std::optional<FrameSyncSearchResult> FrameSyncSearch::findBitAccurateMatches(
+std::optional<PatternSearchResult> findPatternMatchesInternal(
     const data::ByteDataSource& dataSource,
     const QString& patternText,
+    bool allowOverlappingMatches,
     QString* errorMessage
 ) {
     if (!dataSource.hasData()) {
@@ -219,45 +218,70 @@ std::optional<FrameSyncSearchResult> FrameSyncSearch::findBitAccurateMatches(
 
     if (patternBits->bitCount <= 0 || patternBits->packedBytes.isEmpty()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Sync pattern must contain at least one bit.");
+            *errorMessage = QStringLiteral("Pattern must contain at least one bit.");
         }
         return std::nullopt;
     }
 
-    FrameSyncSearchResult searchResult;
-    const qsizetype patternBitCount = patternBits->bitCount;
-    if (dataSource.bitCount() < patternBitCount) {
+    PatternSearchResult searchResult;
+    searchResult.patternBitCount = patternBits->bitCount;
+    if (dataSource.bitCount() < searchResult.patternBitCount) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Sync pattern is longer than the loaded file.");
+            *errorMessage = QStringLiteral("Pattern is longer than the loaded file.");
         }
         return std::nullopt;
     }
 
-    const qsizetype maxStartBit = dataSource.bitCount() - patternBitCount;
-    QVector<qsizetype> matchBits;
-    matchBits.reserve(static_cast<int>(qMin<qsizetype>(maxStartBit + 1, 4096)));
+    const qsizetype maxStartBit = dataSource.bitCount() - searchResult.patternBitCount;
+    searchResult.matchStartBits.reserve(static_cast<int>(qMin<qsizetype>(maxStartBit + 1, 4096)));
 
     for (qsizetype startBit = 0; startBit <= maxStartBit; ++startBit) {
         if (!patternMatchesAtOffset(dataSource, *patternBits, startBit)) {
             continue;
         }
 
-        if (searchResult.firstMatchBit < 0) {
-            searchResult.firstMatchBit = startBit;
+        searchResult.matchStartBits.append(startBit);
+        if (!allowOverlappingMatches && searchResult.patternBitCount > 0) {
+            startBit += searchResult.patternBitCount - 1;
         }
-
-        ++searchResult.matchCount;
-        matchBits.append(startBit);
-        startBit += patternBitCount - 1; // skip past this match to prevent overlapping matches
     }
 
-    if (searchResult.matchCount == 0) {
+    if (searchResult.matchStartBits.isEmpty()) {
         if (errorMessage != nullptr) {
-            *errorMessage = QStringLiteral("Sync pattern was not found in the loaded file.");
+            *errorMessage = QStringLiteral("Pattern was not found in the loaded file.");
         }
         return std::nullopt;
     }
 
+    return searchResult;
+}
+
+}  // namespace
+
+std::optional<PatternSearchResult> FrameSyncSearch::findPatternMatches(
+    const data::ByteDataSource& dataSource,
+    const QString& patternText,
+    QString* errorMessage
+) {
+    return findPatternMatchesInternal(dataSource, patternText, true, errorMessage);
+}
+
+std::optional<FrameSyncSearchResult> FrameSyncSearch::findBitAccurateMatches(
+    const data::ByteDataSource& dataSource,
+    const QString& patternText,
+    QString* errorMessage
+) {
+    const std::optional<PatternSearchResult> patternSearchResult =
+        findPatternMatchesInternal(dataSource, patternText, false, errorMessage);
+    if (!patternSearchResult.has_value()) {
+        return std::nullopt;
+    }
+
+    FrameSyncSearchResult searchResult;
+    searchResult.firstMatchBit = patternSearchResult->matchStartBits.first();
+    searchResult.matchCount = patternSearchResult->matchStartBits.size();
+    const qsizetype patternBitCount = patternSearchResult->patternBitCount;
+    const QVector<qsizetype>& matchBits = patternSearchResult->matchStartBits;
     for (int matchIndex = 0; matchIndex < matchBits.size(); ++matchIndex) {
         const qsizetype startBit = matchBits[matchIndex];
         const qsizetype nextStartBit =

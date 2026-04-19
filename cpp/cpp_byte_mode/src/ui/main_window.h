@@ -11,6 +11,7 @@
 #include "features/framing/frame_layout.h"
 
 class QAction;
+class QComboBox;
 class QDockWidget;
 class QLabel;
 class QLineEdit;
@@ -21,6 +22,7 @@ class QSpinBox;
 class QButtonGroup;
 class QDragEnterEvent;
 class QDropEvent;
+class QResizeEvent;
 
 namespace bitabyte::models {
 class ByteTableModel;
@@ -65,21 +67,30 @@ private slots:
 protected:
     void dragEnterEvent(QDragEnterEvent* dragEnterEvent) override;
     void dropEvent(QDropEvent* dropEvent) override;
+    void resizeEvent(QResizeEvent* resizeEvent) override;
 
 private:
     void buildMenus();
     void buildCentralWidget();
     void buildColumnDefinitionsDock();
     void buildLiveBitViewerDock();
+    void openPatternSearchDialog();
     void applyInitialWindowLayout();
     void updateLoadedFileState();
     void updateWindowTitle();
     void resizeTableColumns();
+    void syncFrameWidthControls();
+    void applyRawLayoutControls();
     void resetStateForFreshFile();
     void refreshColumnDefinitionsPanel();
     void validateFramingStateAfterLoad();
     void editVisibleColumns(const QSet<int>& visibleColumns);
+    void focusPatternMatch(qsizetype startBit, qsizetype bitCount);
     void selectVisibleColumns(const QSet<int>& visibleColumns);
+    void selectVisibleColumnsAtRow(const QSet<int>& visibleColumns, int row);
+    void addColumnDefinitionFromHint(int startBit, int endBit, bool isConstant, const QString& label, const QString& valueText);
+    void setBitModeEnabled(bool enabled);
+    void syncTableBitDisplayMode();
     bool buildDefinitionFromSelection(
         const QSet<int>& selectedVisibleColumns,
         features::columns::ByteColumnDefinition* definition,
@@ -117,11 +128,15 @@ private:
     FrameFieldHintsPanel* frameFieldHintsPanel_ = nullptr;
     FieldInspectorPanel* fieldInspectorPanel_ = nullptr;
     FieldCurrentValuePanel* fieldCurrentValuePanel_ = nullptr;
+    QButtonGroup* tableDisplayModeGroup_ = nullptr;
     QButtonGroup* liveBitViewerModeGroup_ = nullptr;
+    QSpinBox* tableBitSizeSpinBox_ = nullptr;
     QSpinBox* liveBitViewerSizeSpinBox_ = nullptr;
-    QPushButton* frameChronologicalOrderButton_ = nullptr;
-    QPushButton* frameLengthOrderButton_ = nullptr;
-    QSpinBox* bytesPerRowSpinBox_ = nullptr;
+    QComboBox* frameSortComboBox_ = nullptr;
+    QPushButton* setFrameButton_ = nullptr;
+    QSpinBox* frameWidthSpinBox_ = nullptr;
+    QSpinBox* frameBitOffsetSpinBox_ = nullptr;
+    QLabel* frameWidthLabel_ = nullptr;
     QLineEdit* syncPatternLineEdit_ = nullptr;
     QLabel* fileInfoLabel_ = nullptr;
     QLabel* frameBrowserInfoLabel_ = nullptr;
@@ -130,7 +145,9 @@ private:
     QAction* reloadFileAction_ = nullptr;
     QAction* exportCsvAction_ = nullptr;
     QAction* applyFramingAction_ = nullptr;
+    QAction* applyFixedFramingAction_ = nullptr;
     QAction* bitstreamSyncDiscoveryAction_ = nullptr;
+    QAction* patternSearchAction_ = nullptr;
     QAction* frameSelectionAction_ = nullptr;
     QAction* clearFramingAction_ = nullptr;
     QAction* addColumnDefinitionAction_ = nullptr;

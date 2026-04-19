@@ -1,7 +1,13 @@
 #pragma once
 
+#include <QHash>
 #include <QString>
+#include <QStringList>
+#include <QVector>
 
+#include <limits>
+
+#include "features/columns/byte_column_definition.h"
 #include "features/columns/visible_byte_column.h"
 
 namespace bitabyte::ui::detail {
@@ -33,6 +39,42 @@ inline QString defaultFieldLabel(const features::columns::VisibleByteColumn& fir
     return QStringLiteral("Bits %1-%2")
         .arg(firstVisibleColumn.absoluteStartBit)
         .arg(lastVisibleColumn.absoluteEndBit);
+}
+
+inline QString nextAutoColumnColorName(
+    const QVector<features::columns::ByteColumnDefinition>& columnDefinitions
+) {
+    static const QStringList autoColorSequence = {
+        QStringLiteral("Sky"),
+        QStringLiteral("Coral"),
+        QStringLiteral("Mint"),
+        QStringLiteral("Gold"),
+        QStringLiteral("Lilac"),
+        QStringLiteral("Sunshine"),
+    };
+
+    QHash<QString, int> usedCounts;
+    for (const QString& colorName : autoColorSequence) {
+        usedCounts.insert(colorName, 0);
+    }
+
+    for (const features::columns::ByteColumnDefinition& definition : columnDefinitions) {
+        if (usedCounts.contains(definition.colorName)) {
+            usedCounts[definition.colorName] += 1;
+        }
+    }
+
+    QString bestColor = autoColorSequence.first();
+    int bestCount = std::numeric_limits<int>::max();
+    for (const QString& colorName : autoColorSequence) {
+        const int usedCount = usedCounts.value(colorName, 0);
+        if (usedCount < bestCount) {
+            bestCount = usedCount;
+            bestColor = colorName;
+        }
+    }
+
+    return bestColor;
 }
 
 inline constexpr int kPreferredMainWindowWidth = 1720;

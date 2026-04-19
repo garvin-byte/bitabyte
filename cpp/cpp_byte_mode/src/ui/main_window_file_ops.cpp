@@ -74,6 +74,10 @@ void MainWindow::exportCsv() {
 
 void MainWindow::bytesPerRowChanged(int bytesPerRow) {
     dataSource_.setBytesPerRow(bytesPerRow);
+    frameLayout_.setRawLayout(
+        static_cast<qsizetype>(qMax(1, bytesPerRow)) * 8,
+        frameBitOffsetSpinBox_ != nullptr ? frameBitOffsetSpinBox_->value() : 0
+    );
     byteTableModel_->reload();
     resizeTableColumns();
     updateLoadedFileState();
@@ -119,10 +123,6 @@ void MainWindow::resetStateForFreshFile() {
     columnDefinitions_.clear();
     dataSource_.setBytesPerRow(16);
 
-    if (bytesPerRowSpinBox_ != nullptr) {
-        const QSignalBlocker blocker(bytesPerRowSpinBox_);
-        bytesPerRowSpinBox_->setValue(dataSource_.bytesPerRow());
-    }
     if (framingController_ != nullptr) {
         framingController_->resetState();
     }
@@ -187,11 +187,33 @@ QString MainWindow::fileSummaryText() const {
             .arg(frameLayout_.frameMaxLengthBytes());
     }
 
-    return QStringLiteral("%1\n%2 bytes | %3 raw rows | %4 bytes/row")
-        .arg(fileInfo.fileName())
-        .arg(dataSource_.byteCount())
-        .arg(dataSource_.rowCount())
-        .arg(dataSource_.bytesPerRow());
+    if (byteTableModel_ != nullptr && byteTableModel_->isBitDisplayMode()) {
+        return frameLayout_.rawStartBitOffset() == 0
+            ? QStringLiteral("%1\n%2 bytes | %3 raw rows | %4 bits/row")
+                  .arg(fileInfo.fileName())
+                  .arg(dataSource_.byteCount())
+                  .arg(frameLayout_.rowCount(dataSource_))
+                  .arg(frameLayout_.rawRowWidthBits())
+            : QStringLiteral("%1\n%2 bytes | %3 raw rows | %4 bits/row @ bit offset %5")
+                  .arg(fileInfo.fileName())
+                  .arg(dataSource_.byteCount())
+                  .arg(frameLayout_.rowCount(dataSource_))
+                  .arg(frameLayout_.rawRowWidthBits())
+                  .arg(frameLayout_.rawStartBitOffset());
+    }
+
+    return frameLayout_.rawStartBitOffset() == 0
+        ? QStringLiteral("%1\n%2 bytes | %3 raw rows | %4 bytes/row")
+              .arg(fileInfo.fileName())
+              .arg(dataSource_.byteCount())
+              .arg(frameLayout_.rowCount(dataSource_))
+              .arg(dataSource_.bytesPerRow())
+        : QStringLiteral("%1\n%2 bytes | %3 raw rows | %4 bytes/row @ bit offset %5")
+              .arg(fileInfo.fileName())
+              .arg(dataSource_.byteCount())
+              .arg(frameLayout_.rowCount(dataSource_))
+              .arg(dataSource_.bytesPerRow())
+              .arg(frameLayout_.rawStartBitOffset());
 }
 
 }  // namespace bitabyte::ui

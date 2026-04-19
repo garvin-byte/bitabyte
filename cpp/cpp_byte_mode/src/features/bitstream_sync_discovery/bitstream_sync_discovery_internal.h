@@ -402,6 +402,8 @@ struct DeduplicationKey {
     return gapDifference <= allowedGapDifference;
 }
 
+// Returns 3 for byte-aligned widths, 2 for nibble-aligned, 1 for even,
+// 0 for odd — used to tiebreak candidates that are otherwise equivalent.
 [[nodiscard]] inline int canonicalWidthPreferenceScore(int bitWidth) {
     if (bitWidth % 8 == 0) {
         return 3;

@@ -91,10 +91,14 @@ QModelIndex FrameGroupTreeModel::parent(const QModelIndex& child) const {
     }
 
     const Node& parentNode = nodes_.at(childNode->parentIndex);
-    const int row = parentNode.parentIndex >= 0
-        ? nodes_.at(parentNode.parentIndex).childNodeIndexes.indexOf(childNode->parentIndex)
-        : 0;
-    return createIndex(qMax(0, row), 0, childNode->parentIndex);
+    if (parentNode.parentIndex < 0) {
+        return createIndex(0, 0, childNode->parentIndex);
+    }
+    const int row = nodes_.at(parentNode.parentIndex).childNodeIndexes.indexOf(childNode->parentIndex);
+    if (row < 0) {
+        return {};
+    }
+    return createIndex(row, 0, childNode->parentIndex);
 }
 
 int FrameGroupTreeModel::rowCount(const QModelIndex& parent) const {

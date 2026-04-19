@@ -237,7 +237,27 @@ bool FrameBrowserController::buildGroupingKeyForVisibleSeed(
     if (visibleColumnIndex < 0) {
         return false;
     }
-    return buildGroupingKeyForVisibleColumns(QSet<int>{visibleColumnIndex}, groupingKey);
+
+    const std::optional<int> definitionIndex = byteTableModel_.visibleDefinitionIndex(visibleColumnIndex);
+    if (!definitionIndex.has_value()) {
+        return buildGroupingKeyForVisibleColumns(QSet<int>{visibleColumnIndex}, groupingKey);
+    }
+
+    QSet<int> definitionColumns;
+    for (int candidateVisibleColumnIndex = 0;
+         candidateVisibleColumnIndex < byteTableModel_.visibleColumnCount();
+         ++candidateVisibleColumnIndex) {
+        const std::optional<int> candidateDefinitionIndex =
+            byteTableModel_.visibleDefinitionIndex(candidateVisibleColumnIndex);
+        if (candidateDefinitionIndex.has_value() && candidateDefinitionIndex.value() == definitionIndex.value()) {
+            definitionColumns.insert(candidateVisibleColumnIndex);
+        }
+    }
+
+    return buildGroupingKeyForVisibleColumns(
+        definitionColumns.isEmpty() ? QSet<int>{visibleColumnIndex} : definitionColumns,
+        groupingKey
+    );
 }
 
 bool FrameBrowserController::buildGroupingKeyForVisibleColumns(

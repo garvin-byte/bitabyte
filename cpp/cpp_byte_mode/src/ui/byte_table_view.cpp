@@ -2,13 +2,45 @@
 
 #include "models/byte_table_model.h"
 
+#include <QApplication>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QPaintEvent>
 #include <QPainter>
+#include <QPalette>
+#include <QStyledItemDelegate>
 
 namespace bitabyte::ui {
 namespace {
+
+QRect bitGlyphRect(const QRect& paintedCellRect, bool hasHighlight) {
+    if (!paintedCellRect.isValid()) {
+        return paintedCellRect;
+    }
+
+    const int minDimension = qMin(paintedCellRect.width(), paintedCellRect.height());
+    const int inset = (hasHighlight || minDimension >= 7) ? 1 : 0;
+    if (inset <= 0 || paintedCellRect.width() <= (inset * 2) || paintedCellRect.height() <= (inset * 2)) {
+        return paintedCellRect;
+    }
+
+    return paintedCellRect.adjusted(inset, inset, -inset, -inset);
+}
+
+QFont bitDigitFont(const QFont& baseFont, const QRect& paintedCellRect) {
+    QFont digitFont(baseFont);
+    digitFont.setFamilies({
+        QStringLiteral("Cascadia Mono"),
+        QStringLiteral("Consolas"),
+        QStringLiteral("Courier New"),
+        QStringLiteral("Monospace"),
+    });
+    digitFont.setStyleHint(QFont::StyleHint::Monospace);
+    digitFont.setBold(true);
+    digitFont.setHintingPreference(QFont::HintingPreference::PreferFullHinting);
+    digitFont.setPixelSize(qMax(7, qMin(paintedCellRect.width(), paintedCellRect.height()) - 1));
+    return digitFont;
+}
 
 class ByteTableHeaderView final : public QHeaderView {
 public:
@@ -107,6 +139,70 @@ protected:
     }
 };
 
+class ByteTableItemDelegate final : public QStyledItemDelegate {
+public:
+    explicit ByteTableItemDelegate(QObject* parent = nullptr)
+        : QStyledItemDelegate(parent) {}
+
+    void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override {
+        const auto* byteTableModel = qobject_cast<const bitabyte::models::ByteTableModel*>(index.model());
+        if (byteTableModel == nullptr
+            || !byteTableModel->isBitDisplayMode()
+            || byteTableModel->isFrameLengthColumn(index.column())) {
+            QStyledItemDelegate::paint(painter, option, index);
+            return;
+        }
+
+        QStyleOptionViewItem viewOption(option);
+        initStyleOption(&viewOption, index);
+
+        painter->save();
+
+        const QBrush backgroundBrush = index.data(Qt::BackgroundRole).value<QBrush>();
+        const bool hasModelBackground =
+            backgroundBrush.style() != Qt::NoBrush && backgroundBrush.color().isValid();
+        const QColor backgroundColor = hasModelBackground ? backgroundBrush.color() : QColor(255, 255, 255);
+        painter->fillRect(viewOption.rect, backgroundColor);
+
+        const QRect paintedCellRect = viewOption.rect.adjusted(0, 0, -1, -1);
+        if (viewOption.text.isEmpty()) {
+            if (viewOption.state.testFlag(QStyle::State_Selected)) {
+                painter->setPen(QPen(viewOption.palette.highlight().color(), 1));
+                painter->setBrush(Qt::NoBrush);
+                painter->drawRect(paintedCellRect);
+            }
+            painter->restore();
+            return;
+        }
+
+        const bool bitIsOne = viewOption.text == QStringLiteral("1");
+        const bool hasHighlight = hasModelBackground;
+        const auto bitCellDisplayMode = byteTableModel->bitCellDisplayMode();
+        const QRect glyphRect = bitGlyphRect(paintedCellRect, hasHighlight);
+
+        if (bitCellDisplayMode == bitabyte::models::ByteTableModel::BitCellDisplayMode::Digits) {
+            painter->setFont(bitDigitFont(viewOption.font, paintedCellRect));
+            painter->setRenderHint(QPainter::TextAntialiasing, true);
+            painter->setPen(QColor(0, 0, 0));
+            painter->drawText(paintedCellRect, Qt::AlignCenter, viewOption.text);
+        } else if (bitCellDisplayMode == bitabyte::models::ByteTableModel::BitCellDisplayMode::Circles) {
+            painter->setPen(QPen(QColor(190, 190, 190), 1));
+            painter->setBrush(bitIsOne ? QBrush(QColor(0, 0, 0)) : QBrush(QColor(255, 255, 255)));
+            painter->drawEllipse(glyphRect);
+        } else {
+            painter->fillRect(glyphRect, bitIsOne ? QColor(0, 0, 0) : QColor(255, 255, 255));
+        }
+
+        if (viewOption.state.testFlag(QStyle::State_Selected)) {
+            painter->setPen(QPen(viewOption.palette.highlight().color(), 1));
+            painter->setBrush(Qt::NoBrush);
+            painter->drawRect(paintedCellRect);
+        }
+
+        painter->restore();
+    }
+};
+
 }  // namespace
 
 ByteTableView::ByteTableView(QWidget* parent)
@@ -115,14 +211,21 @@ ByteTableView::ByteTableView(QWidget* parent)
     setSelectionMode(QAbstractItemView::SelectionMode::ExtendedSelection);
     setAlternatingRowColors(false);
     setShowGrid(true);
+    setGridStyle(Qt::SolidLine);
     setWordWrap(false);
     setTextElideMode(Qt::TextElideMode::ElideNone);
     setHorizontalScrollMode(QAbstractItemView::ScrollMode::ScrollPerPixel);
     setVerticalScrollMode(QAbstractItemView::ScrollMode::ScrollPerPixel);
+    QPalette tablePalette = palette();
+    tablePalette.setColor(QPalette::Mid, QColor(236, 236, 236));
+    setPalette(tablePalette);
     setHorizontalHeader(new ByteTableHeaderView(Qt::Horizontal, this));
+    setItemDelegate(new ByteTableItemDelegate(this));
     horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeMode::Fixed);
+    horizontalHeader()->setMinimumSectionSize(2);
     verticalHeader()->setSectionResizeMode(QHeaderView::ResizeMode::Fixed);
     verticalHeader()->setDefaultAlignment(Qt::AlignmentFlag::AlignCenter);
+    verticalHeader()->setMinimumSectionSize(4);
     verticalHeader()->setDefaultSectionSize(22);
     verticalHeader()->setMinimumWidth(80);
 }

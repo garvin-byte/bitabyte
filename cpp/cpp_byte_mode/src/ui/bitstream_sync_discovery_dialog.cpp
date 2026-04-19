@@ -250,9 +250,14 @@ features::classification::FrameFieldClassificationResult analyzePreviewFields(
 
 }  // namespace
 
-BitstreamSyncDiscoveryDialog::BitstreamSyncDiscoveryDialog(data::ByteDataSource* dataSource, QWidget* parent)
+BitstreamSyncDiscoveryDialog::BitstreamSyncDiscoveryDialog(
+    data::ByteDataSource* dataSource,
+    const QVector<features::columns::ByteColumnDefinition>* existingColumnDefinitions,
+    QWidget* parent
+)
     : QDialog(parent),
       dataSource_(dataSource),
+      existingColumnDefinitions_(existingColumnDefinitions),
       previewFrameLayout_(new features::framing::FrameLayout()),
       previewAnalysisWatcher_(new QFutureWatcher<features::classification::FrameFieldClassificationResult>(this)) {
     qRegisterMetaType<features::bitstream_sync_discovery::BitstreamSyncDiscoveryProgressUpdate>();
@@ -260,7 +265,7 @@ BitstreamSyncDiscoveryDialog::BitstreamSyncDiscoveryDialog(data::ByteDataSource*
     qRegisterMetaType<features::bitstream_sync_discovery::BitstreamSyncDiscoveryCandidateList>();
 
     setModal(true);
-    setWindowTitle(QStringLiteral("Find Frames"));
+    setWindowTitle(QStringLiteral("Find Framing"));
     resize(1280, 760);
     buildLayout();
     setScanningState(false);
@@ -283,7 +288,12 @@ BitstreamSyncDiscoveryDialog::BitstreamSyncDiscoveryDialog(data::ByteDataSource*
                     previewBitViewer_->setPreviewBitHighlights(previewBitHighlightRanges(classificationResult));
                 }
                 if (previewHintsPanel_ != nullptr) {
-                    previewHintsPanel_->setHints(classificationResult);
+                    previewHintsPanel_->setHints(
+                        classificationResult,
+                        existingColumnDefinitions_ != nullptr
+                            ? *existingColumnDefinitions_
+                            : QVector<features::columns::ByteColumnDefinition>{}
+                    );
                 }
                 return;
             }
@@ -313,12 +323,18 @@ BitstreamSyncDiscoveryDialog::selectedCandidate() const {
     return candidates_.at(currentRow);
 }
 
+QVector<features::classification::FrameFieldHint> BitstreamSyncDiscoveryDialog::selectedColumnHints() const {
+    return previewHintsPanel_ != nullptr
+        ? previewHintsPanel_->selectedColumnHints()
+        : QVector<features::classification::FrameFieldHint>{};
+}
+
 void BitstreamSyncDiscoveryDialog::startDiscovery() {
     if (dataSource_ == nullptr || !dataSource_->hasData()) {
         progressPhaseLabel_->setVisible(true);
         progressDetailLabel_->setVisible(true);
         progressPhaseLabel_->setText(QStringLiteral("No file loaded"));
-        progressDetailLabel_->setText(QStringLiteral("Load a file before running Find Frames."));
+        progressDetailLabel_->setText(QStringLiteral("Load a file before running Find Framing."));
         progressBar_->setValue(0);
         return;
     }
@@ -367,7 +383,7 @@ void BitstreamSyncDiscoveryDialog::startDiscovery() {
     setScanningState(true);
     progressPhaseLabel_->setVisible(true);
     progressDetailLabel_->setVisible(true);
-    progressPhaseLabel_->setText(QStringLiteral("Find Frames"));
+    progressPhaseLabel_->setText(QStringLiteral("Find Framing"));
     progressDetailLabel_->setText(QStringLiteral("Scanning framing candidates..."));
     progressBar_->setValue(0);
     workerThread_->start();
@@ -443,7 +459,7 @@ void BitstreamSyncDiscoveryDialog::handleDiscoveryCanceled() {
     progressPhaseLabel_->setVisible(true);
     progressDetailLabel_->setVisible(true);
     progressPhaseLabel_->setText(QStringLiteral("Discovery canceled"));
-    progressDetailLabel_->setText(QStringLiteral("Find Frames was canceled."));
+    progressDetailLabel_->setText(QStringLiteral("Find Framing was canceled."));
     progressBar_->setValue(0);
     stopWorkerThread();
 }
@@ -551,7 +567,7 @@ void BitstreamSyncDiscoveryDialog::buildLayout() {
     advancedControlsLayout->addStretch();
     rootLayout->addLayout(advancedControlsLayout);
 
-    progressPhaseLabel_ = new QLabel(QStringLiteral("Find Frames"), this);
+    progressPhaseLabel_ = new QLabel(QStringLiteral("Find Framing"), this);
     progressPhaseLabel_->setVisible(false);
     rootLayout->addWidget(progressPhaseLabel_);
 
@@ -610,7 +626,10 @@ void BitstreamSyncDiscoveryDialog::buildLayout() {
     QVBoxLayout* previewHintsLayout = new QVBoxLayout(previewHintsGroup);
     previewHintsLayout->setContentsMargins(8, 8, 8, 8);
     previewHintsLayout->setSpacing(6);
-    previewHintsPanel_ = new FrameFieldHintsPanel(previewHintsGroup);
+    previewHintsPanel_ = new FrameFieldHintsPanel(
+        FrameFieldHintsPanel::Mode::AddColumnSelection,
+        previewHintsGroup
+    );
     previewHintsLayout->addWidget(previewHintsPanel_);
     leftPaneLayout->addWidget(previewHintsGroup);
     contentSplitter->addWidget(leftPaneWidget);
@@ -831,7 +850,12 @@ void BitstreamSyncDiscoveryDialog::startPreviewAnalysis(
         || !analysisFrameLayout.isFramed()
         || columnSnapshots.isEmpty()) {
         if (previewHintsPanel_ != nullptr) {
-            previewHintsPanel_->setHints(features::classification::FrameFieldClassificationResult{});
+            previewHintsPanel_->setHints(
+                features::classification::FrameFieldClassificationResult{},
+                existingColumnDefinitions_ != nullptr
+                    ? *existingColumnDefinitions_
+                    : QVector<features::columns::ByteColumnDefinition>{}
+            );
         }
         return;
     }

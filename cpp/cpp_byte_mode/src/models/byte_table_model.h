@@ -59,6 +59,17 @@ class ByteTableModel final : public QAbstractTableModel {
     Q_OBJECT
 
 public:
+    enum class DisplayMode {
+        Byte,
+        Bit,
+    };
+
+    enum class BitCellDisplayMode {
+        Squares,
+        Circles,
+        Digits,
+    };
+
     explicit ByteTableModel(
         data::ByteDataSource* dataSource,
         features::framing::FrameLayout* frameLayout,
@@ -96,12 +107,20 @@ public:
     [[nodiscard]] bool visibleColumnsAreContiguous(const QSet<int>& visibleColumns) const;
     [[nodiscard]] bool constantColumnHighlightEnabled() const;
     [[nodiscard]] QHash<int, SplitColumnState> splitColumns() const;
+    [[nodiscard]] DisplayMode displayMode() const;
+    [[nodiscard]] bool isBitDisplayMode() const;
+    [[nodiscard]] BitCellDisplayMode bitCellDisplayMode() const;
+    [[nodiscard]] QFont contentFont() const;
 
     void reload();
     void setConstantColumnHighlightEnabled(bool highlightEnabled);
     void setCounterHighlightedVisibleColumns(const QSet<int>& counterVisibleColumns);
     void setDetectedFieldDefinitions(const QVector<features::columns::ByteColumnDefinition>& detectedFieldDefinitions);
     void setSplitColumns(const QHash<int, SplitColumnState>& splitColumns);
+    void setDisplayMode(DisplayMode displayMode);
+    void setBitCellDisplayMode(BitCellDisplayMode bitCellDisplayMode);
+    void setContentFontPixelSize(int pixelSize);
+    void setPatternHighlightRanges(const QVector<QPair<qsizetype, qsizetype>>& patternHighlightRanges);
 
 private:
     struct SingleByteSelection {
@@ -199,6 +218,9 @@ private:
     bool constantColumnHighlightEnabled_ = true;
     quint64 constantHighlightRequestId_ = 0;
     quint64 activeConstantHighlightRequestId_ = 0;
+    DisplayMode displayMode_ = DisplayMode::Byte;
+    BitCellDisplayMode bitCellDisplayMode_ = BitCellDisplayMode::Squares;
+    QVector<QPair<qsizetype, qsizetype>> patternHighlightRanges_;
 };
 
 }  // namespace bitabyte::models

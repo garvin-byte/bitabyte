@@ -1,18 +1,21 @@
 #pragma once
 
+#include <QComboBox>
 #include <QSet>
 #include <QString>
 #include <QVector>
 
 #include <functional>
+#include <optional>
 
 #include "data/byte_data_source.h"
+#include "features/classification/frame_field_classification.h"
 #include "features/columns/byte_column_definition.h"
 #include "features/framing/frame_layout.h"
 
 class QLineEdit;
-class QPushButton;
 class QStatusBar;
+class QSpinBox;
 class QWidget;
 
 namespace bitabyte::models {
@@ -28,6 +31,7 @@ class InspectionController;
 class FramingController final {
 public:
     struct Callbacks {
+        std::function<bool()> isBitModeEnabled;
         std::function<QSet<int>()> selectedVisibleColumns;
         std::function<bool(QString*, QString*)> extractSelectionPattern;
         std::function<bool(const QSet<int>&, features::columns::ByteColumnDefinition*, QString*)>
@@ -46,8 +50,9 @@ public:
         FrameBrowserController& frameBrowserController,
         InspectionController& inspectionController,
         QLineEdit& syncPatternLineEdit,
-        QPushButton& frameChronologicalOrderButton,
-        QPushButton& frameLengthOrderButton,
+        QSpinBox& fixedFrameWidthSpinBox,
+        QSpinBox& fixedFrameBitOffsetSpinBox,
+        QComboBox& frameSortComboBox,
         QWidget& dialogParent,
         QStatusBar& statusBar,
         Callbacks callbacks
@@ -57,17 +62,33 @@ public:
     void syncControlsFromState();
     void frameSelection();
     void applySyncFraming();
+    void applyFixedFraming();
+    bool frameByPattern(const QString& patternText, QString* errorMessage = nullptr);
+    [[nodiscard]] bool fixedFramingControlsEditable() const;
     void openBitstreamSyncDiscovery();
     void clearFraming();
-    void cycleFrameChronologicalOrder();
-    void cycleFrameLengthOrder();
+    void setFrameSortOption(int sortOptionIndex);
 
 private:
     void applyFrameRowOrder(features::framing::FrameLayout::RowOrderMode rowOrderMode, bool descending);
-    void updateFrameRowOrderButtons();
+    void updateFrameSortComboBox();
     bool applySyncFramingPattern(const QString& patternText, QString* errorMessage = nullptr);
+    bool applyFixedFramingParameters(int frameWidthValue, int bitOffset, QString* errorMessage = nullptr);
     void upsertSyncDefinitionForSelection(const QSet<int>& selectedVisibleColumns);
+    void upsertSyncDefinitionRecord(int startBit, int totalBits, const QString& displayFormat);
     void upsertSyncDefinition(int startBit, int totalBits, const QString& displayFormat);
+    [[nodiscard]] std::optional<features::columns::ByteColumnDefinition> definitionForDetectedHint(
+        const features::classification::FrameFieldHint& detectedHint
+    ) const;
+    int appendDetectedFieldDefinitions(
+        const QVector<features::classification::FrameFieldHint>& detectedHints
+    );
+
+    enum class FramingSource {
+        None,
+        FixedWidth,
+        Other,
+    };
 
     data::ByteDataSource& dataSource_;
     features::framing::FrameLayout& frameLayout_;
@@ -77,13 +98,13 @@ private:
     FrameBrowserController& frameBrowserController_;
     InspectionController& inspectionController_;
     QLineEdit& syncPatternLineEdit_;
-    QPushButton& frameChronologicalOrderButton_;
-    QPushButton& frameLengthOrderButton_;
+    QSpinBox& fixedFrameWidthSpinBox_;
+    QSpinBox& fixedFrameBitOffsetSpinBox_;
+    QComboBox& frameSortComboBox_;
     QWidget& dialogParent_;
     QStatusBar& statusBar_;
     Callbacks callbacks_;
-    bool frameChronologicalDescending_ = false;
-    bool frameLengthDescending_ = false;
+    FramingSource framingSource_ = FramingSource::None;
 };
 
 }  // namespace bitabyte::ui

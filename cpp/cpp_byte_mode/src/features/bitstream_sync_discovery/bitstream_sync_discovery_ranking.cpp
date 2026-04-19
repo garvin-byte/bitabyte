@@ -6,6 +6,17 @@
 namespace bitabyte::features::bitstream_sync_discovery::detail {
 namespace {
 
+// Thresholds for deciding when a longer contained alias should be preferred
+// over a shorter one with a higher raw confidence score.
+constexpr double kAliasMinimumLongerCoverageRatio  = 0.98;
+constexpr double kAliasMinimumShorterCoverageRatio = 0.95;
+constexpr double kAliasMaximumAllowableScoreGap    = 15.0;
+
+// When comparing a wider pattern against a narrower one that dominates it,
+// suppress the width-preference bias if the narrower pattern leads by more
+// than this amount in confidence score.
+constexpr double kDominanceMaximumScoreGapForWidthBias = 4.0;
+
 [[nodiscard]] PatternRecordKey patternRecordKey(const PatternOccurrenceRecord& patternRecord) {
     return {
         patternRecord.patternValue,
@@ -131,12 +142,13 @@ struct ContainedAliasRelation {
         return false;
     }
 
-    if (aliasRelation.longerCoverageRatio < 0.98 || aliasRelation.shorterCoverageRatio < 0.95) {
+    if (aliasRelation.longerCoverageRatio < kAliasMinimumLongerCoverageRatio
+        || aliasRelation.shorterCoverageRatio < kAliasMinimumShorterCoverageRatio) {
         return false;
     }
 
     const double scoreGap = shorterCandidate.confidenceScore - longerCandidate.confidenceScore;
-    if (scoreGap > 15.0) {
+    if (scoreGap > kAliasMaximumAllowableScoreGap) {
         return false;
     }
 
@@ -572,30 +584,31 @@ QVector<PreanalyzedCandidate> screenedPreanalyzedCandidatesForFullAnalysis(
 
     const int perWidthKeepCount = screenedPreanalysisPerWidthKeepCount(settings);
 
-    for (const PreanalyzedCandidate& candidate : familyWinners) {
-        if (screenedCandidates.size() >= globalAnalysisBudget) {
-            break;
-        }
-
-        const PatternRecordKey candidateKey = patternRecordKey(candidate.patternRecord);
-        if (keptCandidateKeys.contains(candidateKey)) {
-            continue;
-        }
-
+    const auto trackScreenedCandidate = [&](const PreanalyzedCandidate& candidate) {
+        const PatternRecordKey recordKey = patternRecordKey(candidate.patternRecord);
         screenedCandidates.append(candidate);
-        keptCandidateKeys.insert(candidateKey);
+        keptCandidateKeys.insert(recordKey);
         keptCountByFamily.insert(candidate.familyKey, keptCountByFamily.value(candidate.familyKey, 0) + 1);
         keptCountByWidth.insert(
             candidate.adjustedPattern.bitWidth,
             keptCountByWidth.value(candidate.adjustedPattern.bitWidth, 0) + 1
         );
+    };
+
+    for (const PreanalyzedCandidate& candidate : familyWinners) {
+        if (screenedCandidates.size() >= globalAnalysisBudget) {
+            break;
+        }
+        const PatternRecordKey candidateKey = patternRecordKey(candidate.patternRecord);
+        if (!keptCandidateKeys.contains(candidateKey)) {
+            trackScreenedCandidate(candidate);
+        }
     }
 
     for (const PreanalyzedCandidate& candidate : quickSortedCandidates) {
         if (screenedCandidates.size() >= globalAnalysisBudget) {
             break;
         }
-
         const PatternRecordKey candidateKey = patternRecordKey(candidate.patternRecord);
         if (keptCandidateKeys.contains(candidateKey)) {
             continue;
@@ -606,21 +619,13 @@ QVector<PreanalyzedCandidate> screenedPreanalyzedCandidatesForFullAnalysis(
         if (keptCountByWidth.value(candidate.adjustedPattern.bitWidth, 0) >= perWidthKeepCount) {
             continue;
         }
-
-        screenedCandidates.append(candidate);
-        keptCandidateKeys.insert(candidateKey);
-        keptCountByFamily.insert(candidate.familyKey, keptCountByFamily.value(candidate.familyKey, 0) + 1);
-        keptCountByWidth.insert(
-            candidate.adjustedPattern.bitWidth,
-            keptCountByWidth.value(candidate.adjustedPattern.bitWidth, 0) + 1
-        );
+        trackScreenedCandidate(candidate);
     }
 
     for (const PreanalyzedCandidate& candidate : quickSortedCandidates) {
         if (screenedCandidates.size() >= globalAnalysisBudget) {
             break;
         }
-
         const PatternRecordKey candidateKey = patternRecordKey(candidate.patternRecord);
         if (keptCandidateKeys.contains(candidateKey)) {
             continue;
@@ -628,10 +633,7 @@ QVector<PreanalyzedCandidate> screenedPreanalyzedCandidatesForFullAnalysis(
         if (keptCountByFamily.value(candidate.familyKey, 0) >= kPreanalysisAlternatesPerFamily) {
             continue;
         }
-
-        screenedCandidates.append(candidate);
-        keptCandidateKeys.insert(candidateKey);
-        keptCountByFamily.insert(candidate.familyKey, keptCountByFamily.value(candidate.familyKey, 0) + 1);
+        trackScreenedCandidate(candidate);
     }
 
     std::sort(screenedCandidates.begin(), screenedCandidates.end(), preanalyzedCandidateRanksBefore);
@@ -867,7 +869,7 @@ BitstreamSyncDiscoveryCandidateList deduplicatedCandidates(
                 }
 
                 const double scoreGap = narrowerCandidate.confidenceScore - widerCandidate.confidenceScore;
-                if (scoreGap > 4.0) {
+                if (scoreGap > kDominanceMaximumScoreGapForWidthBias) {
                     continue;
                 }
 

@@ -15,6 +15,11 @@ class ByteDataSource;
 
 namespace bitabyte::features::frame_sync {
 
+struct PatternSearchResult {
+    qsizetype patternBitCount = 0;
+    QVector<qsizetype> matchStartBits;
+};
+
 struct FrameSyncSearchResult {
     qsizetype firstMatchBit = -1;
     qsizetype matchCount = 0;
@@ -23,6 +28,12 @@ struct FrameSyncSearchResult {
 
 class FrameSyncSearch {
 public:
+    [[nodiscard]] static std::optional<PatternSearchResult> findPatternMatches(
+        const data::ByteDataSource& dataSource,
+        const QString& patternText,
+        QString* errorMessage = nullptr
+    );
+
     [[nodiscard]] static std::optional<FrameSyncSearchResult> findBitAccurateMatches(
         const data::ByteDataSource& dataSource,
         const QString& patternText,

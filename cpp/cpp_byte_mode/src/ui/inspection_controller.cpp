@@ -240,10 +240,8 @@ InspectionController::InspectionController(
                 classifiedConstantHints_ = classificationResult.constantHints;
                 classifiedCounterVisibleColumnIndices_ = classificationResult.counterVisibleColumnIndices;
                 classifiedConstantVisibleColumnIndices_ = classificationResult.constantVisibleColumnIndices;
-                frameFieldHintsPanel_.setHints(classificationResult);
-                byteTableModel_.setDetectedFieldDefinitions(
-                    detectedCounterDefinitions(classificationResult.counterHints, columnDefinitions_)
-                );
+                frameFieldHintsPanel_.setHints(classificationResult, columnDefinitions_);
+                byteTableModel_.setDetectedFieldDefinitions({});
                 byteTableModel_.setCounterHighlightedVisibleColumns({});
                 refreshLiveBitViewer();
                 return;
@@ -460,7 +458,10 @@ void InspectionController::refreshFrameFieldHints() {
 
     if (columnSnapshots.isEmpty()) {
         ++frameFieldHintsRequestId_;
-        frameFieldHintsPanel_.setHints({});
+        frameFieldHintsPanel_.setHints(
+            features::classification::FrameFieldClassificationResult{},
+            columnDefinitions_
+        );
         classifiedCounterHints_.clear();
         classifiedConstantHints_.clear();
         classifiedCounterVisibleColumnIndices_.clear();
@@ -482,14 +483,20 @@ void InspectionController::refreshFrameFieldHints() {
     const data::ByteDataSource dataSourceSnapshot = dataSource_;
     const features::framing::FrameLayout frameLayoutSnapshot = frameLayout_;
     const QVector<features::classification::FrameFieldColumnSnapshot> columnSnapshotsSnapshot = columnSnapshots;
+    const bool bitModeEnabled = byteTableModel_.isBitDisplayMode();
     frameFieldHintsWatcher_->setFuture(QtConcurrent::run(
-        [dataSourceSnapshot, frameLayoutSnapshot, columnSnapshotsSnapshot]() {
+        [dataSourceSnapshot, frameLayoutSnapshot, columnSnapshotsSnapshot, bitModeEnabled]() {
             features::classification::FrameFieldClassificationResult result =
                 features::classification::classifyFramedVisibleColumns(
                     dataSourceSnapshot,
                     frameLayoutSnapshot,
                     columnSnapshotsSnapshot
                 );
+
+            if (bitModeEnabled) {
+                result.counterHints.clear();
+                result.counterVisibleColumnIndices.clear();
+            }
 
             // Gradient-based scan for non-byte-aligned and arbitrary-width counters.
             // Run separately here (not inside classifyFramedVisibleColumns) so it doesn't
